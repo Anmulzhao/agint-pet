@@ -832,7 +832,13 @@ export class PetService extends Service {
       this.syncSettingsFromPet()
     }
     const next = { ...this.ledger.snapshot.display }
-    next.visible = section.visible && (section.enabled ?? true)
+    // The pet's own hide/show intent, stored verbatim. The master switch is
+    // applied when the state view is produced (see the state view below), not
+    // here: writing the conjunction into pet.json turned `enabled: false` into
+    // a persisted "the user hid the pet" and the switch could never be undone -
+    // re-enabling it (or restarting) read that stored `false` straight back
+    // (#1762).
+    next.visible = section.visible
     next.size = Math.round(Math.min(DISPLAY_SIZE_MAX, Math.max(DISPLAY_SIZE_MIN, section.size)))
     next.right = Math.round(Math.min(DISPLAY_INSET_MAX, Math.max(0, section.right)))
     next.bottom = Math.round(Math.min(DISPLAY_INSET_MAX, Math.max(0, section.bottom)))
@@ -934,7 +940,11 @@ export class PetService extends Service {
       ...(decoration === undefined ? {} : { decoration }),
       ...(announcement === undefined ? {} : { announcement }),
       affinity: this.ledger.affinityView(Date.now()),
-      display: { ...this.ledger.snapshot.display },
+      // The one place the two visibility answers are combined: the pet's own
+      // hide/show intent AND the plugin master switch. Producing the effective
+      // value here - rather than storing it - keeps the switch reversible and
+      // keeps pet.json describing only what the user chose (#1762).
+      display: { ...this.ledger.snapshot.display, visible: this.isEnabled() && this.ledger.snapshot.display.visible },
       pet: {
         id: entry.id,
         displayName: entry.displayName,

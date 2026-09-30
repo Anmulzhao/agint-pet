@@ -258,6 +258,22 @@ export function petSettingsSection(
   persisted: Partial<PetDisplayConfig> = {},
   committed: Partial<PetDisplayConfig> = {},
 ): PetSettingsSection {
+  // `visible` and `enabled` answer two DIFFERENT questions and are kept
+  // apart on purpose (#1762):
+  //
+  // - `visible` is the pet's own hide/show intent, persisted in its pet.json
+  //   and written by the sprite's hide/summon control and by the aggregate
+  //   shell's fallback switch.
+  // - `enabled` is the plugin master switch, which hides the pet whatever that
+  //   own intent says.
+  //
+  // The effective "is it on screen" state is the conjunction, and it belongs at
+  // the single point that PRODUCES the view (see PetService.state), never here
+  // and never written back to pet.json. Folding it into this field is what made
+  // the master switch one-way: switching it off stored the derived `false` as
+  // the user's own intent, so switching it on again (or restarting) read that
+  // stored `false` back and the pet never returned.
+  const enabled = readLive(config.enabled, PET_FORM_DEFAULTS.enabled)
   return {
     visible: displayField('visible', config.visible, persisted, committed),
     size: displayField('size', config.size, persisted, committed),
@@ -265,7 +281,7 @@ export function petSettingsSection(
     bottom: displayField('bottom', config.bottom, persisted, committed),
     bubbleScale: displayField('bubbleScale', config.bubbleScale, persisted, committed),
     petId: readLive(config.petId, fallbackPetId),
-    enabled: readLive(config.enabled, PET_FORM_DEFAULTS.enabled),
+    enabled,
     decorationEnabled: readLive(config.decorationEnabled, PET_FORM_DEFAULTS.decorationEnabled),
   }
 }
