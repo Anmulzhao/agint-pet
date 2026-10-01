@@ -1,12 +1,25 @@
-# dsh-pet — Multi-pet companion plugin
+# dsh-pet · Desktop Pet Companion & Interactive Live2D Widget for DeepSeek Harness (DSH)
 
 English | [中文](README.zh.md)
 
-> A registry-driven desktop companion for DeepSeek Harness — the built-in whale girl plus any pet you drop in.
+<p align="center">
+  <img src="https://img.shields.io/npm/v/@linxin666/dsh-client-ui-pet?style=flat-square" alt="Version">
+  &nbsp;
+  <img src="https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-4c6ef5?style=flat-square&amp;labelColor=454a54" alt="DSH">
+  &nbsp;
+  <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License">
+</p>
 
-While the model thinks, you wait — your pet swims. It follows official session activity and switches animations while waiting, thinking, using tools, composing a reply, celebrating completion, or reporting failure; you can also pat its head, feed it dried fish, and watch its affinity grow. Pets are registry entries, not code: every pet is one `pet.json` manifest plus one atlas image, and the host discovers them at startup.
+<p align="center">
+  <strong>Interactive Desktop Pet Companion & Live2D Widget for DeepSeek Harness (DSH)</strong><br>
+  <em>Agent State Tracking · Live2D & Sprite Pets · Interactive Feeding · Status Bubbles · DSH Workshop</em>
+</p>
 
-Re-implemented from the pet feature of the Codex desktop app, as an official DSH plugin shape (cordis bundle: host half + client half in one package).
+> A registry-driven desktop companion for DeepSeek Harness — featuring the built-in anime whale girl plus one-click installs for any custom Live2D or sprite pet from the Workshop.
+
+While the AI model thinks, you wait — your desktop companion swims and interacts on screen. It dynamically tracks the official DeepSeek Harness session lifecycle, switching fluid animations during waiting, thinking, tool execution (Bash, code editing, web searches), reply generation, celebration on success, and alert on error; you can pat its head, feed it dried fish, and watch affinity grow. Pets are driven by an extensible asset registry rather than hard-coded logic: each pet consists of a `pet.json` manifest and an atlas image (or Live2D model pack), auto-discovered by the host at startup.
+
+Re-engineered from desktop companion concepts into an official DSH cordis bundle (host backend + client frontend in a single integrated package).
 
 ## Features
 

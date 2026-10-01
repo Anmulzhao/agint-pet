@@ -1,12 +1,25 @@
-# dsh-pet — 多宠物伴侣插件
+# dsh-pet · DeepSeek Harness (DSH) 桌面宠物伴侣与 Live2D 互动挂件插件
 
 [English](README.md) | 中文
 
-> 一个注册表驱动的桌面伴侣：内置鲸鱼娘，也接受你放入的任何宠物。
+<p align="center">
+  <img src="https://img.shields.io/npm/v/@linxin666/dsh-client-ui-pet?style=flat-square" alt="Version">
+  &nbsp;
+  <img src="https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-4c6ef5?style=flat-square&amp;labelColor=454a54" alt="DSH">
+  &nbsp;
+  <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License">
+</p>
 
-模型思考时你在等待，你的宠物在游动。它跟随官方会话活动，在等待、思考、调用工具、整理回复、庆祝完成、报告失败时切换动画；你还可以摸摸它的头、喂它小鱼干，看着亲密度一点点成长。宠物是注册表条目而不是代码：每只宠物只需一份 `pet.json` manifest 加一张图集，宿主启动时自动发现。
+<p align="center">
+  <strong>DeepSeek Harness（DSH）官方 Web GUI 与桌面客户端专属桌面宠物伴侣生态</strong><br>
+  <em>智能体思考跟随 · Live2D / 精灵图桌宠 · 摸头喂食互动 · 实时状态气泡 · 创意工坊宠物下载</em>
+</p>
 
-从 Codex 桌面应用的宠物功能重新实现，采用官方 DSH 插件形态（cordis bundle：host 半区 + client 半区，一个包）。
+> 一个注册表驱动的桌面宠物伴侣：内置萌系鲸鱼娘，同时支持从创意工坊一键下载安装任意 Live2D 与精灵图桌宠。
+
+模型思考时你在等待，你的桌面宠物在屏幕上畅游交互。它深度跟随 DeepSeek Harness 官方智能体会话生命周期，在空闲等待、模型思考、调用工具（Bash / 代码编写 / 网页检索）、整理回复、庆祝完成与报告失败时自动无缝切换动画；你还可以随时摸摸头、喂食小鱼干互动，看着专属亲密度与等级不断提升。桌面宠物基于资产注册表驱动而不是硬编码：每只宠物只需一份 `pet.json` manifest 加一张贴图集（或 Live2D 动作模型包），宿主启动时自动发现并支持热切换。
+
+从桌面应用的经典宠物系统重构演进，完美适配官方 DSH 插件形态（cordis bundle：host 宿主半区 + client 浏览器半区一站式融合）。
 
 ## 功能
 
