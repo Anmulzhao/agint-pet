@@ -315,8 +315,8 @@ describe('loadPetRegistry', () => {
     })
 
     // The repo checkout also resolves doro and miku (frames2d gameplay pets),
-    // jyn and jyn-foxtail (frames2d gameplay pets) and starry-doll
-    // (community sprite2d pet) from
+    // jyn and jyn-foxtail (frames2d gameplay pets), long-niang (sprite2d pet)
+    // and starry-doll (community sprite2d pet) from
     // assets/; the npm files whitelist excludes them (Workshop delivery), so
     // npm installs see the atlas pets until a Workshop install lands them
     // under $DSH_HOME/pets. blue-throated-bee-eater ships bundled alongside
@@ -326,6 +326,7 @@ describe('loadPetRegistry', () => {
       'doro',
       'jyn',
       'jyn-foxtail',
+      'long-niang',
       'miku',
       'ouo-neko',
       'starry-doll',
@@ -343,6 +344,13 @@ describe('loadPetRegistry', () => {
       displayName: '女仆鲸鱼娘',
       renderer: 'frames2d',
     })
+    expect(registry.byId('long-niang')).toMatchObject({
+      displayName: '龙娘',
+      atlasRows: 11,
+      columns: 8,
+      rows: [6, 8, 8, 4, 5, 8, 6, 6, 6],
+    })
+    expect(existsSync(petAtlasFile(registry.byId('long-niang')!))).toBe(true)
     expect(registry.byId('ouo-neko')).toMatchObject({
       displayName: 'OUO Neko',
       atlasRows: 11,
