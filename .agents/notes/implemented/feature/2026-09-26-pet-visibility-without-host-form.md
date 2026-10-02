@@ -2,6 +2,10 @@
 
 Status: implemented
 
+Related: [2026-10-02-pet-settings-form-late-binding](2026-10-02-pet-settings-form-late-binding.md)
+keeps this fallback reachable only when no settings form can be resolved at all;
+the aggregate mount race that used to trigger it spuriously is fixed there.
+
 ## Problem
 
 The pet settings card has two backings. When the Host serves a `pet` settings

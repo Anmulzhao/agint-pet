@@ -49,7 +49,7 @@ vi.mock('@deepseek-ai/dsh-client-store', () => ({
   },
 }))
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import { apply } from './index.ts'
+import { apply, BINDER_RETRY_MS } from './index.ts'
 
 beforeAll(() => {
   document.documentElement.lang = 'zh'
@@ -65,6 +65,8 @@ interface FakeClientLifecycle {
   setEnabled(enabled: boolean): void
   /** Namespaces the family settings binder was asked for (empty without one). */
   boundNamespaces(): string[]
+  /** Publish the family settings binder, as the aggregate's async mount does. */
+  publishFamilyBinder(enabled: boolean): void
 }
 
 const activeLifecycles: FakeClientLifecycle[] = []
@@ -79,6 +81,12 @@ interface FakeContextOptions {
   familyBinder?: boolean
   /** Initial value of the settings section the bound form answers with. */
   enabled?: boolean
+  /**
+   * What the shared per-entry form answers before any family binder exists.
+   * The aggregate renames the pet row to 'web-ui-pet', so the family alias
+   * 'pet' is never a served key there and the fallback reports unavailable.
+   */
+  fallbackStatus?: 'ready' | 'unavailable'
 }
 
 function fakeContext(options: FakeContextOptions = {}): FakeClientLifecycle {
@@ -87,6 +95,39 @@ function fakeContext(options: FakeContextOptions = {}): FakeClientLifecycle {
   const sessionListeners = new Set<() => void>()
   const boundNamespaces: string[] = []
   let settingsValue: { enabled?: boolean } | undefined = options.enabled === undefined ? undefined : { enabled: options.enabled }
+  // The family binder is published later in the aggregate race; the shared form
+  // answers 'unavailable' until then, exactly as the wrongly-keyed fallback does.
+  let binderPublished = options.familyBinder === true
+  const fallbackStatus = options.fallbackStatus ?? 'ready'
+  // The shared per-entry form a standalone install answers with: the plugin's
+  // own row id IS served, so it carries the same values as the bound scope. A
+  // test that sets fallbackStatus to 'unavailable' models the aggregate, where
+  // the family alias is never a served key and the form can only report that.
+  const fallbackScope = {
+    getSnapshot: () => (fallbackStatus === 'ready'
+      ? {
+          status: 'ready',
+          writable: true,
+          value: settingsValue,
+          base: undefined,
+          user: {},
+          revision: 1,
+          mode: 'host',
+        }
+      : {
+          status: 'unavailable',
+          writable: false,
+          value: undefined,
+          base: undefined,
+          user: {},
+          revision: undefined,
+          mode: 'host',
+        }),
+    subscribe: (listener: () => void) => {
+      settingsListeners.add(listener)
+      return () => { settingsListeners.delete(listener) }
+    },
+  }
   const scope = {
     getSnapshot: () => ({
       status: 'ready',
@@ -119,8 +160,15 @@ function fakeContext(options: FakeContextOptions = {}): FakeClientLifecycle {
     locale: { register: () => () => {} },
     // The family binder is optional (dsh-web-settings may be absent); both
     // answers are the shared per-entry form of this plugin's own profile entry.
-    get: (name: string) => name === 'webUiSettings' && options.familyBinder === true ? familyBinder : undefined,
-    configForms: { get: () => scope },
+    get: (name: string) => name === 'webUiSettings' && binderPublished ? familyBinder : undefined,
+    configForms: {
+      get: () => fallbackScope,
+      // The aggregate's mirror names the renamed row; the family alias never
+      // appears there, so the fallback lookup cannot resolve it.
+      describe: () => ({
+        getSnapshot: () => ({ view: { namespaces: [{ ns: 'web-ui-pet' }] } }),
+      }),
+    },
     slots: {
       // Cordis runs the factory when the slot mounts and its returned
       // disposer when the fiber disposes; mirror that so slot content
@@ -158,6 +206,10 @@ function fakeContext(options: FakeContextOptions = {}): FakeClientLifecycle {
     sessionsListenerCount: () => sessionListeners.size,
     setEnabled: (enabled: boolean) => { settingsValue = { enabled } },
     boundNamespaces: () => boundNamespaces,
+    publishFamilyBinder: (enabled: boolean) => {
+      binderPublished = true
+      settingsValue = { enabled }
+    },
   }
   activeLifecycles.push(lifecycle)
   return lifecycle
@@ -254,6 +306,32 @@ describe('pet client apply', () => {
     lifecycle.emitSettings()
     expect(lifecycle.sessionsListenerCount()).toBe(1)
     expect(document.body.querySelectorAll('[data-dsh-pet-root]')).toHaveLength(1)
+  })
+
+  it('binds the family binder published AFTER apply, instead of keeping the dead fallback', () => {
+    // Given a page where the aggregate mounts its inlined children behind an
+    // async fetch: at apply() time the family settings binder does not exist
+    // yet, and the shared mirror cannot resolve the 'pet' alias (the aggregate
+    // serves the renamed 'web-ui-pet' row), so a single early probe falls back
+    // to a permanently unavailable form.
+    vi.useFakeTimers()
+    const lifecycle = fakeContext({ fallbackStatus: 'unavailable' })
+
+    // When the pet client plugin applies inside that window
+    apply(lifecycle.ctx)
+
+    // Then no binder was bound yet and the pet surface is not yet up
+    expect(lifecycle.boundNamespaces()).toEqual([])
+    expect(document.body.querySelectorAll('[data-dsh-pet-root]')).toHaveLength(0)
+
+    // And when the aggregate finally publishes the binder, the settings form
+    // rebinds to the real namespace and the pet surface comes up.
+    lifecycle.publishFamilyBinder(true)
+    vi.advanceTimersByTime(BINDER_RETRY_MS)
+
+    expect(lifecycle.boundNamespaces()).toEqual(['pet'])
+    expect(document.body.querySelectorAll('[data-dsh-pet-root]')).toHaveLength(1)
+    vi.useRealTimers()
   })
 
   it('user gets the pet settings form through the family binder when the group plugin is mounted', () => {

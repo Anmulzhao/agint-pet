@@ -16,7 +16,7 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
-import type { ConfigForm, ConfigForms } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { ConfigForm, ConfigFormSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the shared configuration forms Context merge (ctx.configForms).
@@ -126,38 +126,202 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /**
- * The configuration form the settings card stages and saves through: the
- * family binder when dsh-web-settings is mounted, otherwise the shared form of
- * this plugin's own profile entry.
- *
- * The two are not interchangeable by name. A plugin's settings ARE its own
- * config on 0.1.7, so the form belongs to the profile entry that carries the
- * plugin — and only the family binder knows which entry that is, because the
- * family bundle renames child rows ('pet' becomes 'web-ui-pet' there) while a
- * standalone install keeps the package's own id.
- * @param ctx - client root context.
- * @returns the form for the pet's settings page.
+ * The profile entry ids a pet install is served under, most specific first. The
+ * family bundle renames child rows, so a standalone install and an aggregate
+ * one answer to different ids for the same 'pet' namespace.
  */
 const AGGREGATE_ENTRY_ID = 'web-ui-pet'
 const PET_ENTRY_IDS: readonly string[] = [AGGREGATE_ENTRY_ID, 'ui-pet', PET_SETTINGS_NS]
 
-function servedEntryId(forms: ConfigForms): string {
-  let served: readonly string[] | undefined
-  try {
-    served = forms.describe().getSnapshot().view?.namespaces.map(view => view.ns)
-  } catch {
-    served = undefined
-  }
-  if (!served || served.length === 0) return PET_SETTINGS_NS
-  return PET_ENTRY_IDS.find(id => served.includes(id)) ?? PET_SETTINGS_NS
+/** How long the deferred form keeps retrying before it settles on the fallback. */
+export const BINDER_RETRY_MS = 250
+const BINDER_ATTEMPTS = 24
+
+/** The snapshot an unresolved (or resolvable-but-unbound) form publishes. */
+function pendingSnapshot<T>(status: 'loading' | 'unavailable'): ConfigFormSnapshot<T> {
+  return { status, value: undefined, base: undefined, user: undefined, revision: undefined, writable: false, mode: 'host' }
 }
 
-function petSettingsForm(ctx: ClientContext): ConfigForm<PetSettings> {
-  const binder = ctx.get('webUiSettings')
-  if (binder !== undefined && typeof binder.bind === 'function') {
-    return binder.bind<PetSettings>({ namespace: PET_SETTINGS_NS })
+/**
+ * A ConfigForm that late-binds to the family settings binder.
+ *
+ * The binder service (dsh-web-settings) is not guaranteed to be published by the
+ * time this plugin's apply() runs: the aggregate bundle mounts its inlined
+ * children — including the binder — inside an async mount that awaits the
+ * active-rows fetch, while standalone loader entries like this one apply
+ * synchronously in that window. A single early probe then permanently falls
+ * back to `configForms.get('pet')`, which is never a served row id under the
+ * aggregate (the row is `web-ui-pet`), so the settings card renders "not
+ * exposed" forever even though the Host serves the namespace.
+ *
+ * This form resolves through the binder as soon as the service appears and
+ * delegates the whole ConfigForm surface to it, re-publishing to its own
+ * subscribers on every swap. Until a form is resolved it publishes a loading
+ * (then unavailable) snapshot so the card shows a transient state, never a
+ * false "not exposed". If the binder never appears it retries for a bounded
+ * window, then permanently binds the non-bridge fallback by SERVED entry id.
+ */
+class DeferredSettingsForm implements ConfigForm<PetSettings> {
+  private ctx: ClientContext
+  private current: ConfigForm<PetSettings> | undefined
+  private readonly listeners = new Set<() => void>()
+  private unsubscribeCurrent: (() => void) | undefined
+  private retryTimer: number | undefined
+  private attempts = 0
+  private disposed = false
+  private readonly fallback: ConfigForm<PetSettings>
+  private fallbackUnsubscribe: (() => void) | undefined
+
+  constructor(ctx: ClientContext) {
+    this.ctx = ctx
+    this.fallback = ctx.configForms.get<PetSettings>(this.resolveFallbackEntryId())
+    // No binder yet: the aggregate publishes it after an async mount, so keep
+    // probing. A shared form that can answer for itself is adopted at once.
+    if (!this.resolve() && !this.fallbackSettled()) this.scheduleRetry()
+    else if (this.current === undefined) this.adoptFallback()
   }
-  return ctx.configForms.get<PetSettings>(servedEntryId(ctx.configForms))
+
+  /**
+   * True while the shared mirror reports the pet namespace unavailable — the
+   * only state in which waiting can still help. A fallback that is ready (or
+   * merely loading, which the mirror fills in on its own) is adopted at once.
+   */
+  private fallbackSettled(): boolean {
+    try {
+      return this.fallback.getSnapshot().status !== 'unavailable'
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Bind the fallback to a SERVED row id when the mirror can name one; a mirror
+   * that cannot is left to report its own unavailable state.
+   */
+  private resolveFallbackEntryId(): string {
+    try {
+      const served = this.ctx.configForms.describe().getSnapshot().view?.namespaces.map(view => view.ns)
+      if (served && served.length > 0) {
+        const hit = PET_ENTRY_IDS.find(id => served.includes(id))
+        if (hit !== undefined) return hit
+      }
+    } catch {
+      // fall through to the family namespace; the form reports unavailable.
+    }
+    return PET_SETTINGS_NS
+  }
+
+  /**
+   * Adopt the family binder the moment it is published.
+   * @returns true when a binder was bound, false when none is available yet.
+   */
+  private resolve(): boolean {
+    if (this.disposed) return false
+    let binder: { bind?: unknown } | undefined
+    try {
+      binder = this.ctx.get('webUiSettings') as { bind?: unknown } | undefined
+    } catch {
+      binder = undefined
+    }
+    if (binder === undefined || typeof binder.bind !== 'function') return false
+    let bound: ConfigForm<PetSettings>
+    try {
+      bound = (binder as { bind: <T>(spec: { namespace: string }) => ConfigForm<T> })
+        .bind<PetSettings>({ namespace: PET_SETTINGS_NS })
+    } catch {
+      return false
+    }
+    this.current = bound
+    // Mirror the bound form's changes to our own subscribers; a later re-resolve
+    // swaps this subscription to the new form.
+    this.unsubscribeCurrent?.()
+    this.unsubscribeCurrent = bound.subscribe(() => this.publish())
+    this.publish()
+    return true
+  }
+
+  /**
+   * Adopt the shared per-entry form. It is used immediately unless it reports
+   * the namespace unavailable, in which case the binder may still be on its way
+   * and the retry window takes over (see scheduleRetry).
+   */
+  private adoptFallback(): void {
+    this.current = this.fallback
+    this.fallbackUnsubscribe ??= this.fallback.subscribe(() => this.publish())
+    this.unsubscribeCurrent = this.fallbackUnsubscribe
+    this.publish()
+  }
+
+  /** Retry the binder lookup a few times across the aggregate's async mount. */
+  private scheduleRetry(): void {
+    if (this.disposed) return
+    if (this.attempts >= BINDER_ATTEMPTS) {
+      this.adoptFallback()
+      return
+    }
+    this.attempts += 1
+    this.retryTimer = window.setTimeout(() => {
+      this.retryTimer = undefined
+      if (this.disposed) return
+      if (this.resolve()) return
+      // The binder still absent: keep waiting only while the shared form cannot
+      // answer for itself, otherwise a standalone install stalls for the window.
+      if (this.fallbackSettled()) {
+        this.attempts = BINDER_ATTEMPTS
+        this.adoptFallback()
+        return
+      }
+      this.scheduleRetry()
+    }, BINDER_RETRY_MS)
+  }
+
+  private publish(): void {
+    for (const listener of this.listeners) listener()
+  }
+
+  /** The resolved form, or a placeholder snapshot when still pending. */
+  private snapshot(): ConfigFormSnapshot<PetSettings> {
+    return this.current?.getSnapshot() ?? pendingSnapshot<PetSettings>(this.attempts >= BINDER_ATTEMPTS ? 'unavailable' : 'loading')
+  }
+
+  getSnapshot(): ConfigFormSnapshot<PetSettings> {
+    return this.snapshot()
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+
+  mutate(ops: Parameters<ConfigForm<PetSettings>['mutate']>[0], expectedRevision?: number): Promise<boolean> {
+    return this.current?.mutate(ops, expectedRevision) ?? Promise.resolve(false)
+  }
+
+  set(field: string, value: unknown): Promise<boolean> {
+    return this.current?.set(field, value) ?? Promise.resolve(false)
+  }
+
+  unset(field: string): Promise<boolean> {
+    return this.current?.unset(field) ?? Promise.resolve(false)
+  }
+
+  /** Release the retry timer and mirror subscription; not part of ConfigForm. */
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    if (this.retryTimer !== undefined) {
+      window.clearTimeout(this.retryTimer)
+      this.retryTimer = undefined
+    }
+    this.unsubscribeCurrent?.()
+    this.unsubscribeCurrent = undefined
+    this.current = undefined
+    this.listeners.clear()
+    // The shared per-entry form carries no disposer of its own (ConfigForm is a
+    // pure read/write surface); only this form's own subscriptions are released.
+    this.fallbackUnsubscribe?.()
+    this.fallbackUnsubscribe = undefined
+  }
 }
 
 /**
@@ -199,7 +363,7 @@ export function apply(ctx: ClientContext): void {
   defaultPetRendererRegistry.register(live2dRenderer)
   defaultPetRendererRegistry.register(frames2dRenderer)
 
-  const settingsForm = petSettingsForm(ctx)
+  const settingsForm = new DeferredSettingsForm(ctx)
   const enabled = (): boolean => {
     const snapshot = settingsForm.getSnapshot()
     return snapshot.status === 'ready'
@@ -500,6 +664,9 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(
     () => () => {
       unsubscribeSettings()
+      // Release the deferred form's retry timer and its mirror subscription so a
+      // disposed fiber can never bind or publish after teardown.
+      settingsForm.dispose()
       killUi()
     },
     'pet: client lifecycle',
