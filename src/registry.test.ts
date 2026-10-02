@@ -315,7 +315,8 @@ describe('loadPetRegistry', () => {
     })
 
     // The repo checkout also resolves doro and miku (frames2d gameplay pets),
-    // jyn (frames2d gameplay pet) and starry-doll (community sprite2d pet) from
+    // jyn and jyn-foxtail (frames2d gameplay pets) and starry-doll
+    // (community sprite2d pet) from
     // assets/; the npm files whitelist excludes them (Workshop delivery), so
     // npm installs see the atlas pets until a Workshop install lands them
     // under $DSH_HOME/pets. blue-throated-bee-eater ships bundled alongside
@@ -324,6 +325,7 @@ describe('loadPetRegistry', () => {
       'blue-throated-bee-eater',
       'doro',
       'jyn',
+      'jyn-foxtail',
       'miku',
       'ouo-neko',
       'starry-doll',
