@@ -6,7 +6,7 @@
   "author": "dsh-web",
   "version": "1.0.0",
   "description": "A chibi flat-illustration Blue-throated Bee-eater (Merops philippinus): azure throat, teal-green plumage and a chestnut crown, matched to the blue-throated-bee-eater skin palette. A perch-loving flyer that waves its wing, hops to catch bees and tilts its head to review your code.",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "renderer": "sprite2d",
   "sprite2d": {
     "spritesheetPath": "spritesheet.webp",

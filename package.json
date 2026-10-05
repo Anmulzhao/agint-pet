@@ -48,10 +48,11 @@
     "assets/ouo-neko",
     "assets/blue-throated-bee-eater",
     "assets/decorations",
+    "assets/agint",
     "contracts",
     "icon.svg"
   ],
-  "license": "Apache-2.0",
+  "license": "MIT",
   "dsh": {
     "engines": {
       "dsh": ">=0.1.7-rc.1"

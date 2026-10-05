@@ -7,7 +7,7 @@ English | [中文](README.zh.md)
   &nbsp;
   <img src="https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-4c6ef5?style=flat-square&amp;labelColor=454a54" alt="DSH">
   &nbsp;
-  <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
 
 <p align="center">
@@ -219,7 +219,7 @@ Host-side sibling plugins can push one structured announcement through the `pet`
 
 | Registry id | Selector label | Source |
 |---|---|---|
-| `blue-throated-bee-eater` | 蓝喉蜂虎 | Companion art contributed by the repository contributor under Apache-2.0 (12 AI-illustrated pose references in the palette of the blue-throated-bee-eater skin; composed by docs/archive/blue-throated-bee-eater-pet/gen-pet.py with per-track standalone poses: perched, flight, front hover, waving, landing, droop, tilt, review; ship 小蜜蜂 as the treat name) |
+| `blue-throated-bee-eater` | 蓝喉蜂虎 | Companion art contributed by the repository contributor under MIT (12 AI-illustrated pose references in the palette of the blue-throated-bee-eater skin; composed by docs/archive/blue-throated-bee-eater-pet/gen-pet.py with per-track standalone poses: perched, flight, front hover, waving, landing, droop, tilt, review; ship 小蜜蜂 as the treat name) |
 | `doro` | doro | Frames2d gameplay pet (contributed by stushansusu under MIT): 11 tracks / 802 frames of 42 ms webp sequences — breathing idle, a work trio, sleep, a wash mode (mood +3/s), a four-direction crawl used by random roaming, three idle-director acts (cola / orange / tongue) and a drag-only struggle loop. Doro is an unofficial, fan-made derivative of Dorothy from *Goddess of Victory: Nikke*; the character and all related rights belong to SHIFT UP — personal non-commercial use only, unofficial and not affiliated with SHIFT UP (see THIRD_PARTY_NOTICES.md) |
 | `jyn` | 女仆鲸鱼娘 | Frames2d gameplay pet (contributed by stushansusu under MIT): maid-whale desktop pet with work/sleep/touch gameplay and three selectable skins (暗夜鎏金 / 蓝海霓裳 / 冰晶公主), each with a probability-rolled click action; 暗夜鎏金 also swaps its own rest loop into the sleep gameplay |
 | `jyn-foxtail` | 鲸鱼娘·狗尾巴草 | Frames2d gameplay pet (contributed by stushansusu under MIT): papercut whale-girl with thirteen 3.00 s frame tracks (idle, tease, eat, heart, face, work, work-success, work-fail, sleep, sleeping, snack, sneeze, yawn) carrying click, work, sleep and idle-director gameplay, plus one static webp cover per track under previews/ |
@@ -350,4 +350,4 @@ The browser half sends one anonymous install heartbeat per UTC day to dsh-market
 
 ## License
 
-[BSD-3-Clause](LICENSE)
+[MIT](LICENSE)
