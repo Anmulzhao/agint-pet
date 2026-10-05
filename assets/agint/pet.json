@@ -1,0 +1,229 @@
+{
+  "petManifestVersion": 2,
+  "id": "agint",
+  "displayName": "智进",
+  "renderer": "frames2d",
+  "frames2d": {
+    "dir": "frames",
+    "defaultFrameMs": 200,
+    "tracks": {
+      "idle": {
+        "frames": [
+          "000.png",
+          "001.png",
+          "002.png",
+          "003.png",
+          "004.png",
+          "005.png"
+        ],
+        "frameMs": [
+          900,
+          900,
+          900,
+          900,
+          900,
+          900
+        ],
+        "loop": true
+      },
+      "waiting": {
+        "frames": [
+          "000.png",
+          "001.png",
+          "002.png",
+          "003.png"
+        ],
+        "frameMs": [
+          700,
+          700,
+          700,
+          700
+        ],
+        "loop": true
+      },
+      "thinking": {
+        "frames": [
+          "000.png",
+          "001.png",
+          "002.png",
+          "003.png",
+          "004.png",
+          "005.png",
+          "006.png",
+          "007.png"
+        ],
+        "frameMs": [
+          200,
+          200,
+          200,
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "loop": true
+      },
+      "tool": {
+        "frames": [
+          "000.png",
+          "001.png",
+          "002.png",
+          "003.png",
+          "004.png",
+          "005.png"
+        ],
+        "frameMs": [
+          130,
+          130,
+          130,
+          130,
+          130,
+          130
+        ],
+        "loop": true
+      },
+      "review": {
+        "frames": [
+          "000.png",
+          "001.png",
+          "002.png",
+          "003.png",
+          "004.png",
+          "005.png",
+          "006.png",
+          "007.png"
+        ],
+        "frameMs": [
+          380,
+          380,
+          380,
+          380,
+          380,
+          380,
+          380,
+          380
+        ],
+        "loop": true
+      },
+      "done": {
+        "frames": [
+          "000.png",
+          "001.png",
+          "002.png",
+          "003.png",
+          "004.png",
+          "005.png",
+          "006.png",
+          "007.png"
+        ],
+        "frameMs": [
+          150,
+          150,
+          150,
+          150,
+          150,
+          150,
+          150,
+          150
+        ],
+        "loop": true
+      },
+      "failed": {
+        "frames": [
+          "000.png",
+          "001.png",
+          "002.png",
+          "003.png"
+        ],
+        "frameMs": [
+          1000,
+          1000,
+          1000,
+          1000
+        ],
+        "loop": true
+      },
+      "idle-degraded": {
+        "frames": [
+          "000.png",
+          "001.png",
+          "002.png",
+          "003.png",
+          "004.png",
+          "005.png"
+        ],
+        "frameMs": [
+          700,
+          700,
+          700,
+          700,
+          700,
+          700
+        ],
+        "loop": true
+      },
+      "idle-unknown": {
+        "frames": [
+          "000.png",
+          "001.png",
+          "002.png",
+          "003.png",
+          "004.png",
+          "005.png"
+        ],
+        "frameMs": [
+          1400,
+          1400,
+          1400,
+          1400,
+          1400,
+          1400
+        ],
+        "loop": true
+      },
+      "idle-failed": {
+        "frames": [
+          "000.png"
+        ],
+        "frameMs": [
+          1000
+        ],
+        "loop": true
+      }
+    },
+    "phases": {
+      "idle": "idle",
+      "waiting": "waiting",
+      "thinking": "thinking",
+      "tool": "tool",
+      "review": "review",
+      "done": "done",
+      "failed": "failed"
+    },
+    "skins": [
+      {
+        "id": "healthy",
+        "label": "健康",
+        "idleTrack": "idle"
+      },
+      {
+        "id": "degraded",
+        "label": "亚健康",
+        "idleTrack": "idle-degraded"
+      },
+      {
+        "id": "unknown",
+        "label": "未知",
+        "idleTrack": "idle-unknown"
+      },
+      {
+        "id": "failed",
+        "label": "故障",
+        "idleTrack": "idle-failed"
+      }
+    ]
+  },
+  "description": "智进（AGINT）的形象：一个字母 A 与自进化回环交织。字母不动，回环绕着它转 —— 近端 Stay 品牌青压在字母之上，远端转暗并没入字母之后，编织点因此自己走。轮廓每一帧都与已发布品牌图标一致（A 近白 #F5F8FC，回环信号青 #24D3E5），适配 DSH 深色外壳。",
+  "license": "MIT"
+}
