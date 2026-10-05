@@ -16,7 +16,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { AffinityConfig, PetAffinityView, PetInteraction } from './affinity.ts'
-import { announcementFresh, parseAnnouncement, type PetAnnouncement } from './announce.ts'
+import { announcementFresh, MAX_ANNOUNCEMENTS, parseAnnouncement, type PetAnnouncement } from './announce.ts'
 import type { TreatConfig } from './treats.ts'
 import {
   emptyProjectionRuntime,
@@ -239,11 +239,21 @@ export interface PetStateView {
    */
   gameplay?: PetGameplayStateView
   /**
-   * The freshest plugin-authored announcement (dsh-usage linkage), within
-   * its TTL; absent when none is fresh. Rendered as a dedicated styled
-   * bubble above the session stack.
+   * The freshest plugin-authored announcement, within its TTL; absent when none
+   * is fresh. Rendered as a dedicated styled bubble above the session stack.
+   *
+   * Kept alongside `announcements` with exactly the meaning it had when the
+   * contract had a single slot, so a browser half predating the per-source
+   * upgrade keeps rendering one bubble instead of none (issue #1812). New
+   * readers should use `announcements`.
    */
   announcement?: PetAnnouncement
+  /**
+   * Every fresh plugin-authored announcement, one per publishing plugin, in
+   * render order (issue #1812). Absent when nothing is fresh, so a host with no
+   * publisher serves exactly what it served before the upgrade.
+   */
+  announcements?: PetAnnouncement[]
   /**
    * Whether the pet's own session/status bubbles render (issue #6). Absent
    * on a host that predates the switch, which the browser half reads as
@@ -327,8 +337,15 @@ export class PetService extends Service {
   private decorationEnabled: boolean
   /** Whether the pet renders its own session/status bubbles (issue #6). */
   private statusBubbles: PetStatusBubbleMode
-  /** The freshest plugin-authored announcement (dsh-usage linkage). */
-  private announcement: PetAnnouncement | undefined
+  /**
+   * Plugin-authored announcements, one slot per `source` (issue #1812). The
+   * contract started as a single slot, where a second announcing plugin
+   * displaced the first; the map is the upgrade the design note predicted for
+   * exactly this moment. Insertion order is the render order and re-announcing
+   * a source updates its entry in place, so two publishers on different
+   * cadences never swap positions.
+   */
+  private readonly announcements = new Map<string, PetAnnouncement>()
   private disposeActivity: (() => void) | undefined
   /** Session whose most recent meaningful event currently drives the global pet. */
   private displaySession: Session | undefined
@@ -430,16 +447,48 @@ export class PetService extends Service {
   }
 
   /**
-   * RPC: one plugin-authored announcement bubble (dsh-usage linkage). The
-   * payload is validated into a bounded PetAnnouncement; a malformed one is
-   * dropped silently — a sibling plugin's bug must never surface as pet
-   * breakage. The announcement is in-memory only.
+   * RPC: one plugin-authored announcement bubble, held in the publisher's own
+   * slot keyed by `source` (issue #1812). The payload is validated into a
+   * bounded PetAnnouncement; a malformed one is dropped silently — a sibling
+   * plugin's bug must never surface as pet breakage. Re-announcing replaces
+   * only the caller's own slot, so publishers coexist instead of displacing
+   * each other. Announcements are in-memory only.
+   *
+   * The slot table is bounded by {@link MAX_ANNOUNCEMENTS}. Expired entries are
+   * pruned first, so a silent publisher never holds a slot; when the table is
+   * genuinely full, the entry that has been silent longest gives up its slot
+   * to the arriving one — a publisher that keeps refreshing is never evicted.
    */
   announce(input: unknown): { ok: boolean } {
     const parsed = parseAnnouncement(input, Date.now())
     if (parsed === undefined) return { ok: false }
-    this.announcement = parsed
+    const now = Date.now()
+    for (const [source, entry] of this.announcements) {
+      if (!announcementFresh(entry, now)) this.announcements.delete(source)
+    }
+    if (!this.announcements.has(parsed.source) && this.announcements.size >= MAX_ANNOUNCEMENTS) {
+      let oldest = ''
+      let oldestAt = Number.POSITIVE_INFINITY
+      for (const [source, entry] of this.announcements) {
+        if (entry.at < oldestAt) {
+          oldest = source
+          oldestAt = entry.at
+        }
+      }
+      if (oldest !== '') this.announcements.delete(oldest)
+    }
+    this.announcements.set(parsed.source, parsed)
     return { ok: true }
+  }
+
+  /**
+   * The announcement slots still fresh, in render order. An expired entry
+   * simply stops appearing (the client's 2 s poll drops it); no timer owns its
+   * removal.
+   */
+  private freshAnnouncements(): PetAnnouncement[] {
+    const now = Date.now()
+    return [...this.announcements.values()].filter(entry => announcementFresh(entry, now))
   }
 
   /**
@@ -1025,11 +1074,16 @@ export class PetService extends Service {
     }
     // Read-only: the ledger settles on economic events only, never on a read,
     // so polling the state cannot trigger pet.json writes.
-    // An expired announcement simply stops appearing (the client's 2 s poll
-    // drops it); no timer owns its removal.
-    const announcement = this.announcement !== undefined && announcementFresh(this.announcement, Date.now())
-      ? this.announcement
-      : undefined
+    // One slot per publishing plugin (issue #1812); an expired entry simply
+    // stops appearing (the client's 2 s poll drops it), no timer owns removal.
+    const announcements = this.freshAnnouncements()
+    // The freshest entry keeps the pre-#1812 meaning of the singular field, so
+    // a browser half that predates the array still renders one bubble instead
+    // of none (a rolling upgrade must never blank a publisher's bubble).
+    const announcement = announcements.reduce<PetAnnouncement | undefined>(
+      (freshest, entry) => freshest === undefined || entry.at > freshest.at ? entry : freshest,
+      undefined,
+    )
     const skin = this.persistedSkin(entry)
     // The hover panel's action row extensions (issue #6). Served on every poll
     // so a plugin that mounts or disposes its registration shows up (or goes
@@ -1043,6 +1097,7 @@ export class PetService extends Service {
       sessions,
       ...(decoration === undefined ? {} : { decoration }),
       ...(announcement === undefined ? {} : { announcement }),
+      ...(announcements.length === 0 ? {} : { announcements }),
       statusBubbles: this.statusBubbles,
       ...(panelActions.length === 0 ? {} : { panelActions }),
       affinity: this.ledger.affinityView(Date.now()),

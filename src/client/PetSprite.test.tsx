@@ -9,6 +9,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { PetSprite, type PetSpriteProps } from './PetSprite.tsx'
 import { t } from './locales.ts'
 import type { PetStateView } from '../service.ts'
+import type { PetAnnouncement } from '../announce.ts'
 import type { PetDefinition, PetTrackDef } from '../registry.ts'
 import type { PetAnimation } from '../state.ts'
 import type { DecorationView } from '../contracts/status-decoration.ts'
@@ -1305,6 +1306,96 @@ describe('PetSprite status bubble switch (issue #6)', () => {
   it('keeps the interaction feedback bubble while the built-in ones are off', () => {
     renderPet({ snapshot: busy('off'), feedback: { text: '摸摸成功', kind: 'pet', at: 1 } })
     expect(screen.queryByText('摸摸成功')).not.toBeNull()
+  })
+})
+
+describe('PetSprite announcement bubbles from several publishers (issue #1812)', () => {
+  /** One publisher's announcement as the host serves it, `ageMs` old. */
+  const from = (source: string, amount: string, ageMs = 0): PetAnnouncement => ({
+    source,
+    kind: 'cost',
+    title: 'DeepSeek',
+    amount,
+    tone: 'ok',
+    ttlMs: 60_000,
+    at: Date.now() - ageMs,
+  })
+
+  it('renders one bubble per publishing plugin', () => {
+    renderPet({
+      snapshot: {
+        ...snapshot,
+        announcements: [
+          from('dsh-pet-quota', '今日 1.2M tokens'),
+          from('dsh-pet-notices', '余额 ¥110.00'),
+        ],
+      },
+    })
+
+    // The reported defect: one publisher used to erase the other's bubble.
+    expect(screen.queryByText('今日 1.2M tokens')).not.toBeNull()
+    expect(screen.queryByText('余额 ¥110.00')).not.toBeNull()
+  })
+
+  it('stacks the publishers above the session bubbles in the served order', () => {
+    renderPet({
+      snapshot: {
+        ...snapshot,
+        bubble: '正在思考',
+        sessions: [{ sessionId: 's-a', animation: 'running', phase: 'thinking', bubble: '正在思考' }],
+        announcements: [
+          from('dsh-pet-quota', '今日 1.2M tokens'),
+          from('dsh-pet-notices', '余额 ¥110.00'),
+        ],
+      },
+    })
+
+    // Each announcement carries its publisher's tag, so the DOM order is what
+    // the bubble stack renders: session bubble first, publishers above it.
+    const stack = screen.getByText('正在思考').closest('div')!
+    const tags = Array.from(stack.querySelectorAll('[data-dsh-pet-announcement]'))
+      .map(node => node.getAttribute('data-dsh-pet-announcement'))
+    expect(tags).toEqual(['dsh-pet-quota', 'dsh-pet-notices'])
+  })
+
+  it('renders the singular field alone for a host predating the per-source array', () => {
+    renderPet({ snapshot: { ...snapshot, announcement: from('dsh-pet-quota', '今日 1.2M tokens') } })
+
+    // A rolling upgrade must not blank a publisher: the pre-#1812 host field is
+    // still read when the array is absent.
+    expect(screen.queryByText('今日 1.2M tokens')).not.toBeNull()
+  })
+
+  it('drops a publisher whose ttl lapsed between polls', () => {
+    renderPet({
+      snapshot: {
+        ...snapshot,
+        announcements: [
+          from('dsh-pet-quota', '今日 1.2M tokens', 61_000),
+          from('dsh-pet-notices', '余额 ¥110.00'),
+        ],
+      },
+    })
+
+    expect(screen.queryByText('今日 1.2M tokens')).toBeNull()
+    expect(screen.queryByText('余额 ¥110.00')).not.toBeNull()
+  })
+
+  it('yields the whole stack to interaction feedback', () => {
+    renderPet({
+      snapshot: {
+        ...snapshot,
+        announcements: [
+          from('dsh-pet-quota', '今日 1.2M tokens'),
+          from('dsh-pet-notices', '余额 ¥110.00'),
+        ],
+      },
+      feedback: { text: '摸摸成功', kind: 'pet', at: 3 },
+    })
+
+    expect(screen.queryByText('摸摸成功')).not.toBeNull()
+    expect(screen.queryByText('今日 1.2M tokens')).toBeNull()
+    expect(screen.queryByText('余额 ¥110.00')).toBeNull()
   })
 })
 

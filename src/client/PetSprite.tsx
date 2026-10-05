@@ -637,13 +637,16 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
   const statusBubble = statusBubblesOn && feedback === null && sessionBubbles.length === 0
     ? snapshot?.bubble
     : undefined
-  // The freshest plugin-authored announcement (dsh-usage linkage): a
-  // dedicated, specially styled bubble above the session stack. The host
-  // already TTL-filters; this client-side check covers the last poll tick.
-  const announcement = snapshot?.announcement
-  const usageAnnouncement = feedback === null && announcement !== undefined && announcementFresh(announcement, Date.now())
-    ? announcement
-    : undefined
+  // The plugin-authored announcements: one dedicated, specially styled bubble
+  // per publishing plugin above the session stack (issue #1812 — the contract
+  // used to hold a single slot, so a second publisher displaced the first).
+  // The host already TTL-filters; this client-side check covers the last poll
+  // tick. A host predating the array serves the singular field only, and a
+  // browser half predating it (this file, before the upgrade) renders the same
+  // one bubble, so neither side of a rolling upgrade loses a publisher.
+  const announced = snapshot?.announcements ?? (snapshot?.announcement !== undefined ? [snapshot.announcement] : [])
+  const now = Date.now()
+  const usageAnnouncements = feedback === null ? announced.filter(entry => announcementFresh(entry, now)) : []
   // Each session's inner whisper (碎碎念) rides its own bubble — short
   // inner-voice copy woken by that session's activity, never the model's or
   // another session's. Instead of a second bubble of its own, a fresh
@@ -651,7 +654,7 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
   // never wears two voices at once. Interaction feedback takes over the
   // whole bubble area while it plays, so whispers yield to it like status
   // copy.
-  const bubblePresent = feedback !== null || sessionBubbles.length > 0 || statusBubble !== undefined || usageAnnouncement !== undefined
+  const bubblePresent = feedback !== null || sessionBubbles.length > 0 || statusBubble !== undefined || usageAnnouncements.length > 0
   const displayName = snapshot?.name ?? definition.displayName
   // The host-served status decoration (M5, #567); absent = text-only bubbles.
   const decoration = snapshot?.decoration
@@ -768,7 +771,7 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
           {feedback.text}
         </div>
       )}
-      {feedback === null && (sessionBubbles.length > 0 || statusBubble !== undefined || usageAnnouncement !== undefined) && (
+      {feedback === null && (sessionBubbles.length > 0 || statusBubble !== undefined || usageAnnouncements.length > 0) && (
         <div
           ref={bubbleRef}
           className={styles.bubbleStack}
@@ -839,7 +842,16 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
               {statusBubble}
             </div>
           )}
-          {usageAnnouncement !== undefined && <UsageAnnouncementBubble announcement={usageAnnouncement} />}
+          {/*
+            One bubble per publishing plugin, in the order the host serves
+            them. Keyed by `source`, not by arrival: a repeating publisher
+            updates its own bubble in place instead of remounting (which would
+            replay the entrance animation on every poll), and two publishers on
+            different cadences keep their positions.
+          */}
+          {usageAnnouncements.map(entry => (
+            <UsageAnnouncementBubble key={entry.source} announcement={entry} />
+          ))}
         </div>
       )}
       {hovered && dragRef.current === null && (
