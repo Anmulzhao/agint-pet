@@ -104,6 +104,7 @@ function petProps(overrides: Partial<PetSpriteProps> = {}): PetSpriteProps {
     onHide: vi.fn(),
     onDragEnd: vi.fn(),
     onRename: vi.fn(),
+    onPanelAction: vi.fn(),
     onOpenSession: vi.fn(),
     onFeedbackDone: vi.fn(),
     t,
@@ -1199,6 +1200,111 @@ describe('PetSprite portal target', () => {
   it('portals the float into document.body when no target is given', () => {
     renderPet()
     expect(document.body.querySelector('[role="button"]')).not.toBeNull()
+  })
+})
+
+describe('PetSprite plugin panel actions (issue #6)', () => {
+  const withActions = (...ids: string[]): PetStateView => ({
+    ...snapshot,
+    panelActions: ids.map(id => ({ id, label: id === 'pet-quota-swap' ? '换装' : id, order: 0 })),
+  })
+
+  it('renders no plugin action while nothing is registered', () => {
+    renderPet()
+    fireEvent.pointerOver(screen.getByRole('button', { name: '鲸鱼娘' }))
+    // The row is exactly the built-in one: a pet with no sibling plugin
+    // showing an action would mean the extension point leaked a default.
+    expect(screen.getByText('喂食')).toBeDefined()
+    expect(document.querySelectorAll('[data-dsh-pet-panel-action]')).toHaveLength(0)
+  })
+
+  it('renders a registered action after the built-in row and reports its id on click', () => {
+    const onPanelAction = vi.fn()
+    renderPet({ snapshot: withActions('pet-quota-swap'), onPanelAction })
+
+    fireEvent.pointerOver(screen.getByRole('button', { name: '鲸鱼娘' }))
+    const action = screen.getByText('换装')
+    // The built-in row keeps its order; the extension follows it.
+    const row = action.closest('[class*="actions"]')!
+    expect(Array.from(row.children).map(child => child.textContent))
+      .toEqual(['喂食', '改名', '隐藏', '换装'])
+    expect(action.closest('button')?.getAttribute('data-dsh-pet-panel-action')).toBe('pet-quota-swap')
+
+    fireEvent.click(action)
+    expect(onPanelAction).toHaveBeenCalledWith('pet-quota-swap')
+  })
+
+  it('renders the plugin tooltip the registration declared', () => {
+    renderPet({
+      snapshot: {
+        ...snapshot,
+        panelActions: [{ id: 'pet-quota-swap', label: '换装', title: '切换到下一只宠物', order: 0 }],
+      },
+    })
+    fireEvent.pointerOver(screen.getByRole('button', { name: '鲸鱼娘' }))
+    expect(screen.getByText('换装').closest('button')?.getAttribute('title')).toBe('切换到下一只宠物')
+  })
+
+  it('shows a plugin action even when a voice pack hides every built-in action', () => {
+    renderPet({
+      definition: { ...petDefinition(), panel: { actions: [] } },
+      snapshot: withActions('pet-quota-swap'),
+    })
+    fireEvent.pointerOver(screen.getByRole('button', { name: '鲸鱼娘' }))
+    expect(screen.queryByText('喂食')).toBeNull()
+    expect(screen.getByText('换装')).toBeDefined()
+  })
+})
+
+describe('PetSprite status bubble switch (issue #6)', () => {
+  const busy = (mode?: 'auto' | 'off'): PetStateView => ({
+    ...snapshot,
+    animation: 'running',
+    phase: 'thinking',
+    bubble: '正在思考',
+    sessions: [
+      { sessionId: 's-a', animation: 'running', phase: 'thinking', bubble: '正在思考' },
+      { sessionId: 's-b', animation: 'running-right', phase: 'tool', bubble: '正在使用 grep' },
+    ],
+    ...(mode === undefined ? {} : { statusBubbles: mode }),
+  })
+
+  it('keeps the shipped bubbles for a host that serves no mode', () => {
+    renderPet({ snapshot: busy() })
+    expect(screen.queryAllByText('正在思考').length).toBeGreaterThan(0)
+  })
+
+  it('hides the built-in session and status bubbles when they are switched off', () => {
+    renderPet({ snapshot: busy('off') })
+    // Neither the multi-session stack nor the legacy single status bubble.
+    expect(screen.queryAllByText('正在思考')).toHaveLength(0)
+    expect(screen.queryByText('正在使用 grep')).toBeNull()
+  })
+
+  it('keeps a sibling plugin announcement bubble while the built-in ones are off', () => {
+    renderPet({
+      snapshot: {
+        ...busy('off'),
+        announcement: {
+          source: 'dsh-pet-quota',
+          kind: 'cost',
+          title: 'DeepSeek',
+          amount: '今日 1.2M tokens',
+          tone: 'ok',
+          ttlMs: 60_000,
+          at: Date.now(),
+        },
+      },
+    })
+    // The point of the switch: the pet stops speaking for itself, and a plugin
+    // that drives its own bubble surface still gets the row.
+    expect(screen.queryAllByText('正在思考')).toHaveLength(0)
+    expect(screen.queryByText('今日 1.2M tokens')).not.toBeNull()
+  })
+
+  it('keeps the interaction feedback bubble while the built-in ones are off', () => {
+    renderPet({ snapshot: busy('off'), feedback: { text: '摸摸成功', kind: 'pet', at: 1 } })
+    expect(screen.queryByText('摸摸成功')).not.toBeNull()
   })
 })
 

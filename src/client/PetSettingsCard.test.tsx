@@ -41,6 +41,36 @@ function response(value: unknown, ok = true): Response {
   return { ok, status: ok ? 200 : 500, json: async () => value } as Response
 }
 
+/**
+ * A Host-served pet namespace: the settings document, its user layer, and a
+ * mutate that applies the card's batch and publishes the settled view back,
+ * which is what the card's read-back judgment reads.
+ */
+function readyForm(value: PetSettings) {
+  let section: PetSettings = { ...value }
+  // The Host document's user layer is keyed by field name, so the test seam
+  // writes through a record view of the same shape the form contract serves.
+  let user: Record<string, unknown> = {}
+  const listeners = new Set<() => void>()
+  const publish = () => { for (const listener of listeners) listener() }
+  const mutate = vi.fn(async (ops: ReadonlyArray<{ op: 'set' | 'unset'; path: string[]; value?: unknown }>) => {
+    for (const op of ops) {
+      const field = op.path[0] as string
+      if (op.op === 'set') user[field] = op.value
+      else delete user[field]
+    }
+    section = { ...value, ...user }
+    publish()
+    return true
+  })
+  const scope = {
+    getSnapshot: () => ({ status: 'ready', writable: true, value: section, base: value, user, revision: 1 }),
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
+    mutate,
+  } as unknown as ConfigForm<PetSettings>
+  return { scope, mutate, value: () => ({ user }) }
+}
+
 beforeAll(() => {
   document.documentElement.lang = 'zh'
 })
@@ -210,5 +240,63 @@ describe('pet settings card rendered without a Host settings form', () => {
     expect(screen.queryByLabelText(t('settings.enabled'))).toBeNull()
     expect(screen.queryByLabelText(t('settings.size'))).toBeNull()
     controller.dispose()
+  })
+})
+
+describe('the status bubble switch on the Host settings form', () => {
+  it('user switches the pet own bubbles off and the form writes the mode', async () => {
+    // Given a Host that serves the pet namespace with the shipped default
+    vi.useFakeTimers()
+    const { scope, value, mutate } = readyForm({ statusBubbles: 'auto' })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === '/api/pet/pets') return response([{ id: 'whale-girl', displayName: '鲸鱼娘' }])
+      if (path === '/api/pet/state') return response({ pet: { id: 'whale-girl' }, display: { visible: true } })
+      throw new Error('unexpected request: ' + path)
+    }))
+    const controller = new PetSettingsCardController(scope)
+    await vi.advanceTimersByTimeAsync(0)
+    const face = controller.inject()
+    const state = () => face.hooks.petSettingsCard.getSnapshot()
+
+    // When the card renders, the switch is on screen beside the other fields
+    render(
+      <PetSettingsCard
+        t={t}
+        usePetSettingsCard={select => useSyncExternalStore(face.hooks.petSettingsCard.subscribe, () => select(face.hooks.petSettingsCard.getSnapshot()))}
+        save={face.save}
+        discard={face.discard}
+        edit={face.edit}
+        resetField={face.resetField}
+      />,
+    )
+    expect(screen.getByLabelText(t('settings.statusBubbles'))).toBeTruthy()
+    expect(state()).toMatchObject({ statusBubbles: { text: 'auto', invalid: false } })
+
+    // When the user picks Off and saves
+    face.edit('statusBubbles', 'off')
+    expect(state()).toMatchObject({ dirty: true, statusBubbles: { text: 'off' } })
+    face.save()
+    await vi.waitFor(() => { expect(state().saving).toBe(false) })
+
+    // Then the settings document holds the mode, and the draft clears
+    expect(mutate).toHaveBeenCalledWith([{ op: 'set', path: ['statusBubbles'], value: 'off' }])
+    expect(value().user?.statusBubbles).toBe('off')
+    expect(state()).toMatchObject({ dirty: false, failed: false, statusBubbles: { text: 'off' } })
+    controller.dispose()
+  })
+
+  it('refuses a draft the switch does not accept instead of writing it', () => {
+    const { scope } = readyForm({ statusBubbles: 'auto' })
+    const face = new PetSettingsCardController(scope).inject()
+
+    face.edit('statusBubbles', 'maybe')
+
+    // The save stays blocked: a mode the host schema has no union member for
+    // must never reach the settings document.
+    expect(face.hooks.petSettingsCard.getSnapshot()).toMatchObject({
+      invalid: true,
+      statusBubbles: { text: 'maybe', invalid: true },
+    })
   })
 })

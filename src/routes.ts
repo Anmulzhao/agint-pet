@@ -613,6 +613,15 @@ export function makePetRoutes(deps: { service: PetService; ctx: Context; assetCa
       if (typeof petId !== 'string') return Promise.reject(new Error('invalid-pet'))
       return service.setPetId(petId)
     }),
+    // Hover-panel action click (issue #6): the browser half owns no plugin
+    // callbacks, so a click on a registered action travels back here and the
+    // service dispatches it to the plugin that registered it. Same loopback /
+    // paired-device guard as every other endpoint in this family.
+    postRoute(ctx, PET_API_PREFIX + '/panel-action', (body) => {
+      const id = body.id
+      if (typeof id !== 'string') return Promise.reject(new Error('invalid-panel-action'))
+      return service.selectPanelAction(id)
+    }),
     // Gameplay verbs (miku-pet generalization): touch rolls a named zone's
     // branch; the omitted-zone form is the plain-click boost during a touch
     // animation. Mode/tick/buy drive the work, sleep and shop loops.

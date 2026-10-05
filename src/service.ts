@@ -27,6 +27,7 @@ import {
   type ProjectionRuntime,
 } from './event-projection.ts'
 import { PetLedger, type LedgerConfig, type LedgerInteractionResult } from './ledger.ts'
+import { PanelActionRegistry, type PetPanelActionRegistration, type PetPanelActionView } from './panel-actions.ts'
 import {
   DEFAULT_PET_NAME,
   DISPLAY_INSET_MAX,
@@ -90,6 +91,8 @@ export interface PetConfig {
   enabled?: boolean
   /** Status-decoration master switch (pet-center M5, #567); defaults to on. */
   decorationEnabled?: boolean
+  /** Whether the pet's own session/status bubbles render (issue #6); defaults to 'auto'. */
+  statusBubbles?: PetStatusBubbleMode
   /** Prebuilt registry (tests); defaults to scanning the package + user dirs. */
   registry?: PetRegistry
   /** Extra manifest entries composed by the embedding application. */
@@ -123,6 +126,36 @@ export interface PetSettingsSection {
    * the settings surface mirrors this field and can turn it off.
    */
   decorationEnabled?: boolean
+  /** Whether the pet's own session/status bubbles render (issue #6). */
+  statusBubbles?: PetStatusBubbleMode
+}
+
+/**
+ * Whether the pet renders its own session/status bubbles (issue #6).
+ *
+ * `auto` is the shipped behavior: every active session keeps a bubble, and a
+ * sibling plugin's announcement bubble rides the same stack above them. `off`
+ * hides ONLY the pet's own bubbles — the announcement bubble, the interaction
+ * feedback bubble and the sprite itself are untouched — which is what a plugin
+ * that drives its own bubble surface needs. Anything unknown resolves to
+ * `auto`, so an older profile or a hand-edited settings document keeps the
+ * status bubbles rather than losing them silently.
+ */
+export type PetStatusBubbleMode = 'auto' | 'off'
+
+/** Every accepted {@link PetStatusBubbleMode}, in settings-card order. */
+export const STATUS_BUBBLE_MODES: readonly PetStatusBubbleMode[] = ['auto', 'off']
+
+/** The shipped default; the switch changes nothing until a user turns it off. */
+export const DEFAULT_STATUS_BUBBLE_MODE: PetStatusBubbleMode = 'auto'
+
+/**
+ * Normalize a stored, live or hand-edited bubble mode.
+ * @param value - the value the settings document carries, when any.
+ * @returns the effective mode; anything but 'off' renders the bubbles.
+ */
+export function statusBubbleMode(value: unknown): PetStatusBubbleMode {
+  return value === 'off' ? 'off' : DEFAULT_STATUS_BUBBLE_MODE
 }
 
 /** Settings namespace of the pet capability. Spelled here rather than imported: the browser half spells the same value. */
@@ -211,6 +244,21 @@ export interface PetStateView {
    * bubble above the session stack.
    */
   announcement?: PetAnnouncement
+  /**
+   * Whether the pet's own session/status bubbles render (issue #6). Absent
+   * on a host that predates the switch, which the browser half reads as
+   * `'auto'` — the behavior that shipped before it existed. Turning it to
+   * `'off'` hides those bubbles only; `announcement` and `bubble` (the
+   * legacy single status bubble) are still served, so the wire contract does
+   * not change with the display preference.
+   */
+  statusBubbles?: PetStatusBubbleMode
+  /**
+   * Actions a sibling plugin registered into the hover panel's action row
+   * (issue #6), in render order. Absent when none is registered, so the
+   * panel row is exactly what it was before the extension point existed.
+   */
+  panelActions?: PetPanelActionView[]
 }
 
 /** Result of `pet.interact`. */
@@ -277,6 +325,8 @@ export class PetService extends Service {
   private enabled: boolean
   /** Status-decoration master switch (M5, #567); mirrored from settings. */
   private decorationEnabled: boolean
+  /** Whether the pet renders its own session/status bubbles (issue #6). */
+  private statusBubbles: PetStatusBubbleMode
   /** The freshest plugin-authored announcement (dsh-usage linkage). */
   private announcement: PetAnnouncement | undefined
   private disposeActivity: (() => void) | undefined
@@ -294,6 +344,13 @@ export class PetService extends Service {
    * disposed sessions are removed by the 'session/disposed' listener.
    */
   private readonly sessionActivity = new Map<Session, SessionActivity>()
+  /**
+   * Hover-panel actions registered by sibling plugins (issue #6). The pet owns
+   * the panel row and serves the registrations; each plugin owns the callback a
+   * click dispatches to. Bounded, in-memory, reclaimed with the registering
+   * plugin's disposer.
+   */
+  private readonly panelActions = new PanelActionRegistry()
   /**
    * Sessions whose reward source is the official event stream. This metadata
    * outlives transient visual resets so a derived legacy `done` cannot reward
@@ -340,6 +397,7 @@ export class PetService extends Service {
     this.machine = new PetStateMachine(this.stateConfig)
     this.enabled = config.enabled ?? true
     this.decorationEnabled = config.decorationEnabled ?? true
+    this.statusBubbles = statusBubbleMode(config.statusBubbles)
 
     this.syncActivity()
   }
@@ -382,6 +440,47 @@ export class PetService extends Service {
     if (parsed === undefined) return { ok: false }
     this.announcement = parsed
     return { ok: true }
+  }
+
+  /**
+   * Register one action into the hover panel's action row (issue #6). The pet
+   * renders the button and dispatches the click back to `onSelect`; the plugin
+   * decides what the button does. Registering is a wiring step, so a malformed
+   * registration throws at the caller's own apply instead of being dropped.
+   *
+   * The registration is reclaimed by the disposer, so the idiomatic call binds
+   * it to the registering plugin's fiber:
+   * ```ts
+   * ctx.effect(() => ctx.pet.registerPanelAction({
+   *   id: 'pet-quota-swap',
+   *   label: '换装',
+   *   onSelect: async () => { await cycleToNextPet(ctx.pet) },
+   * }))
+   * ```
+   * @param action - the registration to serve in the panel row.
+   * @returns a disposer that removes this registration.
+   * @throws when the id, label or callback is unusable, or the row is full.
+   */
+  registerPanelAction(action: PetPanelActionRegistration): () => void {
+    return this.panelActions.register(action)
+  }
+
+  /**
+   * RPC: dispatch one hover-panel action click back to the plugin that
+   * registered it. A rejected id is a stale click (the plugin disposed its
+   * registration between render and click), and a throwing callback is that
+   * plugin's own failure — neither may surface as pet breakage, so both answer
+   * `{ ok: false }` instead of throwing out of the route.
+   * @param id - the action id the browser half reported.
+   * @returns whether the click reached a registered action.
+   */
+  async selectPanelAction(id: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const selected = await this.panelActions.select(id, { petId: this.selectedPetId() })
+      return selected ? { ok: true } : { ok: false, error: 'unknown-panel-action' }
+    } catch {
+      return { ok: false, error: 'panel-action-failed' }
+    }
   }
 
   /** Current persisted display config (read-only view). */
@@ -822,6 +921,7 @@ export class PetService extends Service {
    */
   applySettingsSection(section: PetSettingsSection): void {
     this.decorationEnabled = section.decorationEnabled ?? true
+    this.statusBubbles = statusBubbleMode(section.statusBubbles)
     const selected = typeof section.petId === 'string' ? this.registry.byId(section.petId) : undefined
     if (selected !== undefined) {
       this.ledger.setPetId(selected.id)
@@ -931,6 +1031,10 @@ export class PetService extends Service {
       ? this.announcement
       : undefined
     const skin = this.persistedSkin(entry)
+    // The hover panel's action row extensions (issue #6). Served on every poll
+    // so a plugin that mounts or disposes its registration shows up (or goes
+    // away) within one tick, without a separate endpoint.
+    const panelActions = this.panelActions.views()
     return {
       animation: snapshot.animation,
       ...(snapshot.bubble === undefined ? {} : { bubble: snapshot.bubble }),
@@ -939,6 +1043,8 @@ export class PetService extends Service {
       sessions,
       ...(decoration === undefined ? {} : { decoration }),
       ...(announcement === undefined ? {} : { announcement }),
+      statusBubbles: this.statusBubbles,
+      ...(panelActions.length === 0 ? {} : { panelActions }),
       affinity: this.ledger.affinityView(Date.now()),
       // The one place the two visibility answers are combined: the pet's own
       // hide/show intent AND the plugin master switch. Producing the effective

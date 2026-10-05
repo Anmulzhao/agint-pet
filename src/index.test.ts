@@ -33,6 +33,7 @@ describe('pet configuration schema', () => {
       bubbleScale: 1,
       enabled: true,
       decorationEnabled: true,
+      statusBubbles: 'auto',
     })
   })
 
@@ -69,6 +70,7 @@ describe('pet configuration schema', () => {
       petId: true,
       enabled: true,
       decorationEnabled: true,
+      statusBubbles: true,
     })
   })
 })
@@ -93,6 +95,7 @@ describe('petSettingsSection', () => {
       petId: 'doro',
       enabled: true,
       decorationEnabled: true,
+      statusBubbles: 'auto',
     })
   })
 
@@ -107,6 +110,25 @@ describe('petSettingsSection', () => {
     // Then the same activation reads the edit, while the earlier read stays a snapshot
     expect(petSettingsSection(resolved, 'whale-girl').size).toBe(260)
     expect(before.size).toBe(160)
+  })
+
+  it('user switches the pet\'s own bubbles off from the settings page (#6)', () => {
+    // Given a resolved config whose user turned the status bubbles off
+    const resolved = Config({ statusBubbles: 'off' })
+    // When the plugin resolves the settings section it runs with
+    const section = petSettingsSection(resolved, 'whale-girl')
+    // Then the running pet is told to render no built-in bubbles
+    expect(section.statusBubbles).toBe('off')
+    // And the edit lands in the running activation, not only in the document
+    commitLive(resolved.statusBubbles, 'off')
+    expect(petSettingsSection(resolved, 'whale-girl').statusBubbles).toBe('off')
+  })
+
+  it('user keeps the status bubbles when the document carries no choice', () => {
+    // Given a mount outside a Loader, where no schema default was applied
+    const section = petSettingsSection({}, 'whale-girl')
+    // Then the shipped behavior stands rather than the bubbles silently vanishing
+    expect(section.statusBubbles).toBe('auto')
   })
 
   it('user keeps the pet selection it already has when the config names none', () => {

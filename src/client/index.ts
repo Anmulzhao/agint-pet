@@ -56,6 +56,7 @@ interface PetHttpApi {
   setConfig(patch: Partial<PetDisplayConfig>): Promise<{ ok: true; display: PetDisplayConfig }>
   setName(name: string): Promise<{ ok: true; name: string } | { ok: false; error: string }>
   setPet(petId: string): Promise<{ ok: true; petId: string } | { ok: false; error: string }>
+  panelAction(id: string): Promise<{ ok: boolean; error?: string }>
   setSkin(skin?: string): Promise<{ ok: boolean; error?: string; skin?: string }>
   gameplayTouch(zone?: string): Promise<PetGameplayVerbResult>
   gameplaySetMode(mode: string | null): Promise<PetGameplayVerbResult>
@@ -88,6 +89,7 @@ const petApi: PetHttpApi = {
   setConfig: (patch) => petFetch('/api/pet/set-config', patch),
   setName: (name) => petFetch('/api/pet/set-name', { name }),
   setPet: (petId) => petFetch('/api/pet/set-pet', { petId }),
+  panelAction: (id) => petFetch('/api/pet/panel-action', { id }),
   setSkin: (skin) => petFetch('/api/pet/set-skin', skin === undefined ? {} : { skin }),
   gameplayTouch: (zone) => petFetch('/api/pet/gameplay/touch', zone === undefined ? {} : { zone }),
   gameplaySetMode: (mode) => petFetch('/api/pet/gameplay/mode', { mode }),
@@ -571,6 +573,19 @@ export function apply(ctx: ClientContext): void {
         },
         rename: (name) => {
           petApi.setName(name).then((result) => {
+            if (result.ok) pollNow()
+          }, () => {
+            // Ignore; next poll resyncs.
+          })
+        },
+        // A panel action click (issue #6) travels back to the host, which
+        // dispatches it to the plugin that registered the action. The plugin's
+        // own callback does the work; the browser half only reports the id, and
+        // the next poll brings back whatever that callback changed. A click on
+        // an action the plugin already disposed answers { ok: false } — the
+        // button was one poll tick stale, which is not a pet failure.
+        panelAction: (id) => {
+          petApi.panelAction(id).then((result) => {
             if (result.ok) pollNow()
           }, () => {
             // Ignore; next poll resyncs.

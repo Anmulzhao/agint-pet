@@ -77,6 +77,7 @@ function injected(): PetInjected {
     summon: vi.fn(),
     dragEnd: vi.fn(),
     rename: vi.fn(),
+    panelAction: vi.fn(),
     openSession: vi.fn(),
     feedbackDone: vi.fn(),
     gameplay: {
