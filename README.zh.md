@@ -1,6 +1,106 @@
-# dsh-pet · DeepSeek Harness (DSH) 桌面宠物伴侣与 Live2D 互动挂件插件
+# agint-pet · AGINT 桌宠素材仓 + dsh-pet 上游同步缓冲区
 
 [English](README.md) | 中文
+
+> **这个仓是什么**
+>
+> 两个身份合一：
+>
+> 1. **AGINT 桌宠素材仓** —— 存放「智进」桌宠（`assets/agint/`）的可分发素材。
+> 2. **dsh-pet 上游同步缓冲区** —— fork 自 `zhu1090093659/dsh-pet`，
+>    `src/` `contracts/` `scripts/` 与上游**逐字节相同**，用于低成本 rebase。
+>
+> **这个仓不是什么**
+>
+> - **不是本机运行时。** 宿主跑的是 npm 官方包 `@linxin666/dsh-pet`，
+>   不是本 fork。本 fork 对宿主**零贡献**。
+> - **不是 AGINT 能力本体。** AGINT 侧的状态播报插件在主仓
+>   `Anmulzhao/DSH-AGINT/plugins/agint-mascot`，通过兄弟插件通道
+>   `ctx.pet.announce()` / `ctx.pet.setSkin()` 与桌宠通信。
+>
+> **两仓划界、契约、归属**：见主仓 `docs/brand/agint-pet-repo-relation.md`。
+> **本仓怎么装、怎么校验**：`docs/AGINT/桌宠方案.md`。
+> **AGINT 侧素材需求从哪来**：主仓 `tools/agint-pet/`（生成器）+ `docs/brand/agint-character-spec.md`（形象规范）。
+>
+> 下文第 1 节起是**上游 dsh-pet 的原始文档**，描述插件玩法与契约，未作改动。
+
+<p align="center">
+  <img src="https://img.shields.io/npm/v/@linxin666/dsh-client-ui-pet?style=flat-square" alt="Version">
+  &nbsp;
+  <img src="https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-4c6ef5?style=flat-square&amp;labelColor=454a54" alt="DSH">
+  &nbsp;
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
+</p>
+
+<p align="center">
+  <strong>AGINT 桌宠素材 + DeepSeek Harness (DSH) 桌面宠物插件上游同步缓冲区</strong><br>
+  <em>智进 A+回环 57 帧 · Live2D / 精灵图桌宠 · 状态气泡 · 创意工坊宠物下载</em>
+</p>
+
+## 智进桌宠（`assets/agint/`）
+
+AGINT 框架的桌面形象。**字母 A 静止，自进化回环环绕它顺时针旋转。**
+
+| 项 | 值 |
+|---|---|
+| 注册表 id | `agint` |
+| 渲染方式 | `frames2d`（目录式帧序列，256×256 PNG） |
+| 轨道 | 10 条 · 共 57 帧 |
+| 许可 | MIT |
+| 帧生成器 | 主仓 `DSH-AGINT/tools/agint-pet/build.mjs`（人执行，非运行时） |
+| 形象规范 | 主仓 `DSH-AGINT/docs/brand/agint-character-spec.md` |
+
+### 7 个会话相位 + 3 条系统健康皮肤
+
+`phases` 映射会话生命周期（宿主驱动）：
+
+| 相位 | 轨道 | 帧数 | 帧时长 |
+|---|---|---|---|
+| `idle` 待机 | `idle` | 6 | 900 ms |
+| `waiting` 等待 | `waiting` | 4 | 700 ms |
+| `thinking` 思考 | `thinking` | 8 | 200 ms |
+| `tool` 工具执行 | `tool` | 6 | 130 ms |
+| `review` 整理回复 | `review` | 8 | 380 ms |
+| `done` 完成 | `done` | 8 | 150 ms |
+| `failed` 失败 | `failed` | 4 | 1000 ms |
+
+`skins` 映射**系统健康**（AGINT 侧 `agint-mascot` 插件用 `ctx.pet.setSkin()` 切换）：
+
+| skin id | 标签 | 静止轨道 | 语义 |
+|---|---|---|---|
+| `healthy` | 健康 | `idle` | 正常摆动 |
+| `degraded` | 亚健康 | `idle-degraded` | 跛行 |
+| `unknown` | 未知 | `idle-unknown` | 原地摆、不前进 |
+| `failed` | 故障 | `idle-failed` | 单帧静止（唯一换色） |
+
+> ⚠️ `skins` 是**跨仓契约**。清单少声明一个 id，宿主回 `unknown-skin`、
+> 皮肤静默不换、**零日志**。主仓 `tools/agint-pet/check.mjs` 第 9 条断言
+> 「插件能请求的每个 skin id，清单必须声明」，改皮肤时两仓必须同步改。
+
+## 安装本仓的素材
+
+**素材不走 npm 包，走安装位。** 宿主从 `$DSH_HOME/pets/<id>/` 直读帧。
+
+```sh
+# 从 GitHub 取 agint 素材（不含插件本体）
+git clone --depth 1 https://github.com/Anmulzhao/agint-pet.git
+cp -r agint-pet/assets/agint "$DSH_HOME/pets/agint/"
+
+# 校验（应输出 valid: agint）
+node agint-pet/scripts/dsh-pet.cjs validate "$DSH_HOME/pets/agint"
+```
+
+装完**刷新浏览器页面即生效**（宿主读帧 `cache-control: no-cache`），不必重启 `dsh`。
+若别的宠物都没出现，重启 `dsh web` 兜底。
+
+> ⛔ **仓库 ≠ 安装位。** 东西在 GitHub 上不等于宿主看得到。
+> 帧要生效只有一条路：进 `$DSH_HOME/pets/agint/`。
+
+---
+
+## 上游 dsh-pet 原始文档
+
+以下为上游 `zhu1090093659/dsh-pet` 的插件文档，描述插件玩法与契约。
 
 <p align="center">
   <img src="https://img.shields.io/npm/v/@linxin666/dsh-client-ui-pet?style=flat-square" alt="Version">
@@ -217,15 +317,37 @@ frames2d 宠物可声明 `gameplay` 块——从 miku 桌宠泛化而来的可�
 
 ## 内置宠物
 
-| 注册表 id | 选择器名称 | 来源 |
-|---|---|---|
-| `blue-throated-bee-eater` | 蓝喉蜂虎 | 贡献者以 MIT 贡献的伙伴插画（12 张同角色 AI 立绘素材，配色取蓝喉蜂虎皮肤同源；由 docs/archive/blue-throated-bee-eater-pet/gen-pet.py 组装，各轨道独立姿态：栖枝/飞行/正面悬停/挥翅/降落/垂头/歪头/昂首；饲料以「小蜜蜂」命名） |
-| `doro` | doro | 由 stushansusu 以 MIT 许可证贡献的 frames2d 玩法宠物：11 条轨道 / 802 帧 42ms webp 序列——呼吸待机、打工三件套、睡觉、洗澡模式（心情 +3/秒）、随机漫游用的四向爬行、三个待机小动作（cola / orange / tongue）与仅拖拽期间播放的挣扎循环。Doro 是《胜利女神：妮姬》桃乐丝的非官方同人二创/梗衍生形象，角色及相关权利归 SHIFT UP 所有——仅限个人非商业使用，与官方无隶属或背书关系（见 THIRD_PARTY_NOTICES.md）。 |
-| `jyn` | 女仆鲸鱼娘 | frames2d 玩法宠物（stushansusu 以 MIT 贡献）：带打工/睡觉/触摸玩法与三款可选皮肤（暗夜鎏金 / 蓝海霓裳 / 冰晶公主）的女仆鲸鱼同桌宠，每款皮肤各带一个概率掷骰点击动作；暗夜鎏金另将专属休息循环换入睡觉玩法 |
-| `jyn-foxtail` | 鲸鱼娘·狗尾巴草 | 由 stushansusu 以 MIT 贡献的 frames2d 玩法宠物：剪纸风格的鲸鱼娘，13 条 3.00s 帧序列轨道（idle / tease / eat / heart / face / work / work-success / work-fail / sleep / sleeping / snack / sneeze / yawn），带点击、打工、睡觉与四个待机小动作玩法；previews/ 下每条轨道一张静态 webp 封面 |
-| `ouo-neko` | OUO Neko | `Pessimist0906` 以 MIT 许可证贡献的粉色樱花猫耳伙伴 |
-| `whale-girl` | 鲸鱼娘（原版） | 仓库原有的鲸鱼娘图集 |
-| `whale-girl-refined` | 鲸鱼娘（精致版） | 以鲸鱼娘设计方向为基础，经 AI 辅助二次创作、修复和细节精修的衍生版本 |
+> 下表是**上游 dsh-pet 的内置资产**。本 fork 另加 `assets/agint/`（见本文开头），
+> 以及 4 个**受限资产**（见「分发纪律」）。
+
+| 注册表 id | 选择器名称 | 许可 | 在 npm 白名单 | 来源 |
+|---|---|---|---|---|
+| `agint` | 智进 | MIT | ✅ | **本 fork 新增**。A+回环桌宠，10 轨 57 帧，4 皮肤。由主仓 `tools/agint-pet/build.mjs` 参数化生成 |
+| `blue-throated-bee-eater` | 蓝喉蜂虎 | MIT | ✅ | 贡献者以 MIT 贡献的伙伴插画（12 张同角色 AI 立绘素材，配色取蓝喉蜂虎皮肤同源；由 docs/archive/blue-throated-bee-eater-pet/gen-pet.py 组装，各轨道独立姿态：栖枝/飞行/正面悬停/挥翅/降落/垂头/歪头/昂首；饲料以「小蜜蜂」命名） |
+| `ouo-neko` | OUO Neko | MIT | ✅ | `Pessimist0906` 以 MIT 许可证贡献的粉色樱花猫耳伙伴 |
+| `whale-girl` | 鲸鱼娘（原版） | MIT | ✅ | 仓库原有的鲸鱼娘图集。⚠️ 目录名是 `assets/whale/`，注册表 id 是 `whale-girl`，两者不同名 |
+| `whale-girl-refined` | 鲸鱼娘（精致版） | MIT | ✅ | 以鲸鱼娘设计方向为基础，经 AI 辅助二次创作、修复和细节精修的衍生版本。⚠️ 目录名是 `assets/whale-refined/` |
+| `doro` | doro | MIT ⚠️ | ❌ | 由 stushansusu 以 MIT 许可证贡献的 frames2d 玩法宠物：11 条轨道 / 802 帧 42ms webp 序列。Doro 是《胜利女神：妮姬》桃乐丝的非官方同人二创/梗衍生形象，角色及相关权利归 SHIFT UP 所有——仅限个人非商业使用（见 THIRD_PARTY_NOTICES.md） |
+| `jyn` | 女仆鲸鱼娘 | MIT | ❌ | frames2d 玩法宠物（stushansusu 以 MIT 贡献）：带打工/睡觉/触摸玩法与三款可选皮肤（暗夜鎏金 / 蓝海霓裳 / 冰晶公主） |
+| `jyn-foxtail` | 鲸鱼娘·狗尾巴草 | MIT | ❌ | 由 stushansusu 以 MIT 贡献的 frames2d 玩法宠物：剪纸风格的鲸鱼娘，13 条 3.00s 帧序列轨道，带点击、打工、睡觉与四个待机小动作玩法 |
+| `miku` | Miku | MIT ⚠️ | ❌ | frames2d 玩法宠物。角色权利归 Crypton Future Media（Piapro 角色许可） |
+| `starry-doll` | 星夜人偶 | **CC-BY-NC-SA-4.0** | ❌ | Theater-ahyeon 贡献：sprite2d 哥特星夜人偶，从单张插画抠像后以剪纸变换生成动画。**禁止商用** |
+| `long-niang` | 娘惹 | **CC-BY-NC-SA-4.0** | ❌ | sprite2d。**禁止商用** |
+
+### 分发纪律（`package.json#files` 白名单）
+
+`npm publish` 只打包白名单里的 6 个 assets：`whale` `whale-refined` `ouo-neko`
+`blue-throated-bee-eater` `decorations` `agint`。
+
+**仓内实际有 12 个 assets 目录，6 个被白名单挡住不外流**：
+`doro` `jyn` `jyn-foxtail` `long-niang` `miku` `starry-doll`。
+
+⚠️ 两个 CC-BY-NC-SA-4.0 资产（`starry-doll` `long-niang`）**禁止任何商用**。
+MIT 标记的 `doro` / `miku` 也带**角色权利限制**（非官方同人形象），
+对外分发前先读 `THIRD_PARTY_NOTICES.md`。
+
+⛔ 白名单是「必须显式维护的清单」：**新增自己的资产必须同时加进 `files`**。
+2026-10-05 踩过一次——`assets/agint` 未加白名单，57 帧在仓库里而 `npm pack` 会全漏。
 
 Miku 宠物有意不随包内置：它是 frames2d 玩法宠物，经创意工坊按需安装（见上文 frames2d 一节）。**星夜人偶（Starry Doll）**（Theater-ahyeon 以 CC-BY-NC-SA-4.0 贡献）同样仅经创意工坊分发：sprite2d 哥特星夜人偶，从单张插画抠像后以剪纸变换生成动画（呼吸、蹦跳、挥手、沮丧、review 态放大镜道具），从创意工坊宠物列表安装后落在 `$DSH_HOME/pets/starry-doll/`。**Doro 宠物**（内置）同样是《胜利女神：妮姬》桃乐丝的非官方同人衍生形象；角色及相关权利归 SHIFT UP 所有，素材仅限个人非商业使用——见 THIRD_PARTY_NOTICES.md。
 

@@ -1,6 +1,121 @@
-# dsh-pet · Desktop Pet Companion & Interactive Live2D Widget for DeepSeek Harness (DSH)
+# agint-pet · AGINT desktop pet assets + dsh-pet upstream sync buffer
 
 English | [中文](README.zh.md)
+
+> **What this repository is**
+>
+> Two roles in one repository:
+>
+> 1. **AGINT desktop pet asset home** — holds the distributable assets for the
+>    AGINT "智进" pet (`assets/agint/`).
+> 2. **dsh-pet upstream sync buffer** — forked from `zhu1090093659/dsh-pet`.
+>    `src/`, `contracts/` and `scripts/` are **byte-identical to upstream**,
+>    which is what makes a cheap rebase possible.
+>
+> **What this repository is not**
+>
+> - **It is not the local runtime.** The host runs the official npm package
+>   `@linxin666/dsh-pet`, not this fork. This fork contributes **nothing** to
+>   the running host.
+> - **It is not the AGINT capability itself.** The status-reporting plugin lives
+>   in the main repo at `Anmulzhao/DSH-AGINT/plugins/agint-mascot` and talks to
+>   the pet through the sibling-plugin channel `ctx.pet.announce()` and
+>   `ctx.pet.setSkin()`.
+>
+> **Boundary, contract and ownership**: see the main repo at
+> `docs/brand/agint-pet-repo-relation.md`.
+> **How to install and verify the assets in this repo**: `docs/AGINT/桌宠方案.md`.
+> **Where the AGINT-side asset requirements come from**: the main repo's
+> `tools/agint-pet/` (generator) and `docs/brand/agint-character-spec.md`
+> (character spec).
+>
+> From section "Upstream dsh-pet original docs" below, the text is the upstream
+> `zhu1090093659/dsh-pet` documentation. It is unchanged.
+
+<p align="center">
+  <img src="https://img.shields.io/npm/v/@linxin666/dsh-client-ui-pet?style=flat-square" alt="Version">
+  &nbsp;
+  <img src="https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-4c6ef5?style=flat-square&amp;labelColor=454a54" alt="DSH">
+  &nbsp;
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
+</p>
+
+<p align="center">
+  <strong>AGINT desktop pet assets + DeepSeek Harness (DSH) desktop pet plugin upstream sync buffer</strong><br>
+  <em>57-frame A+orbit pet · Live2D &amp; Sprite Pets · Status Bubbles · DSH Workshop</em>
+</p>
+
+## The AGINT pet (`assets/agint/`)
+
+The desktop character of the AGINT framework. **The letter A stays still; a
+self-evolution ring orbits it clockwise.**
+
+| Item | Value |
+|---|---|
+| Registry id | `agint` |
+| Renderer | `frames2d` (directory-style frame sequence, 256×256 PNG) |
+| Tracks | 10 tracks · 57 frames total |
+| License | MIT |
+| Frame generator | main repo `DSH-AGINT/tools/agint-pet/build.mjs` (run by a human, not at runtime) |
+| Character spec | main repo `DSH-AGINT/docs/brand/agint-character-spec.md` |
+
+### 7 session phases + 3 system-health skins
+
+`phases` maps the session lifecycle (host-driven):
+
+| Phase | Track | Frames | Frame duration |
+|---|---|---|---|
+| `idle` | `idle` | 6 | 900 ms |
+| `waiting` | `waiting` | 4 | 700 ms |
+| `thinking` | `thinking` | 8 | 200 ms |
+| `tool` | `tool` | 6 | 130 ms |
+| `review` | `review` | 8 | 380 ms |
+| `done` | `done` | 8 | 150 ms |
+| `failed` | `failed` | 4 | 1000 ms |
+
+`skins` maps **system health** (the AGINT-side `agint-mascot` plugin switches it
+with `ctx.pet.setSkin()`):
+
+| skin id | Label | Rest track | Meaning |
+|---|---|---|---|
+| `healthy` | 健康 | `idle` | normal swing |
+| `degraded` | 亚健康 | `idle-degraded` | limping |
+| `unknown` | 未知 | `idle-unknown` | swings in place, does not advance |
+| `failed` | 故障 | `idle-failed` | single still frame (the only colour change) |
+
+> ⚠️ `skins` is a **cross-repository contract**. If the manifest omits an id,
+> the host answers `unknown-skin`, the skin does not change, and **nothing is
+> logged**. The main repo's `tools/agint-pet/check.mjs` assertion 9 requires
+> "every skin id the plugin can request must be declared in the manifest".
+> Changing skins means changing both repositories.
+
+## Installing these assets
+
+**Assets do not travel through the npm package. They go to the install
+directory.** The host reads frames straight from `$DSH_HOME/pets/<id>/`.
+
+```sh
+# fetch the agint assets from GitHub (assets only, not the plugin)
+git clone --depth 1 https://github.com/Anmulzhao/agint-pet.git
+cp -r agint-pet/assets/agint "$DSH_HOME/pets/agint/"
+
+# validate (should print valid: agint)
+node agint-pet/scripts/dsh-pet.cjs validate "$DSH_HOME/pets/agint"
+```
+
+Done. **Refreshing the browser page is enough** (the host serves frames with
+`cache-control: no-cache`); restarting `dsh` is not required. If no pet shows up
+at all, restart `dsh web` as a fallback.
+
+> ⛔ **Repository ≠ install directory.** Being on GitHub does not mean the host
+> can see it. Frames take effect through exactly one path: into
+> `$DSH_HOME/pets/agint/`.
+
+---
+
+## Upstream dsh-pet original docs
+
+The text below is the upstream `zhu1090093659/dsh-pet` plugin documentation.
 
 <p align="center">
   <img src="https://img.shields.io/npm/v/@linxin666/dsh-client-ui-pet?style=flat-square" alt="Version">
@@ -217,15 +332,42 @@ Host-side sibling plugins can push one structured announcement through the `pet`
 
 ## Built-in pets
 
-| Registry id | Selector label | Source |
-|---|---|---|
-| `blue-throated-bee-eater` | 蓝喉蜂虎 | Companion art contributed by the repository contributor under MIT (12 AI-illustrated pose references in the palette of the blue-throated-bee-eater skin; composed by docs/archive/blue-throated-bee-eater-pet/gen-pet.py with per-track standalone poses: perched, flight, front hover, waving, landing, droop, tilt, review; ship 小蜜蜂 as the treat name) |
-| `doro` | doro | Frames2d gameplay pet (contributed by stushansusu under MIT): 11 tracks / 802 frames of 42 ms webp sequences — breathing idle, a work trio, sleep, a wash mode (mood +3/s), a four-direction crawl used by random roaming, three idle-director acts (cola / orange / tongue) and a drag-only struggle loop. Doro is an unofficial, fan-made derivative of Dorothy from *Goddess of Victory: Nikke*; the character and all related rights belong to SHIFT UP — personal non-commercial use only, unofficial and not affiliated with SHIFT UP (see THIRD_PARTY_NOTICES.md) |
-| `jyn` | 女仆鲸鱼娘 | Frames2d gameplay pet (contributed by stushansusu under MIT): maid-whale desktop pet with work/sleep/touch gameplay and three selectable skins (暗夜鎏金 / 蓝海霓裳 / 冰晶公主), each with a probability-rolled click action; 暗夜鎏金 also swaps its own rest loop into the sleep gameplay |
-| `jyn-foxtail` | 鲸鱼娘·狗尾巴草 | Frames2d gameplay pet (contributed by stushansusu under MIT): papercut whale-girl with thirteen 3.00 s frame tracks (idle, tease, eat, heart, face, work, work-success, work-fail, sleep, sleeping, snack, sneeze, yawn) carrying click, work, sleep and idle-director gameplay, plus one static webp cover per track under previews/ |
-| `ouo-neko` | OUO Neko | Pink-sakura cat-eared companion contributed by `Pessimist0906` under MIT |
-| `whale-girl` | 鲸鱼娘（原版） | The repository's original whale-girl atlas |
-| `whale-girl-refined` | 鲸鱼娘（精致版） | An AI-assisted derivative with repaired and refined details, based on the whale-girl design direction |
+> The table below lists the **upstream dsh-pet built-in assets**. This fork adds
+> `assets/agint/` (see the top of this file) plus 6 **restricted assets**
+> (see "Distribution discipline").
+
+| Registry id | Selector label | License | In npm whitelist | Source |
+|---|---|---|---|---|
+| `agint` | 智进 | MIT | ✅ | **Added by this fork.** A+orbit pet, 10 tracks / 57 frames, 4 skins. Generated by the main repo's `tools/agint-pet/build.mjs` |
+| `blue-throated-bee-eater` | 蓝喉蜂虎 | MIT | ✅ | Companion art contributed by the repository contributor under MIT (12 AI-illustrated pose references in the palette of the blue-throated-bee-eater skin; composed by docs/archive/blue-throated-bee-eater-pet/gen-pet.py with per-track standalone poses: perched, flight, front hover, waving, landing, droop, tilt, review; ship 小蜜蜂 as the treat name) |
+| `ouo-neko` | OUO Neko | MIT | ✅ | Pink-sakura cat-eared companion contributed by `Pessimist0906` under MIT |
+| `whale-girl` | 鲸鱼娘（原版） | MIT | ✅ | The repository's original whale-girl atlas. ⚠️ the directory is `assets/whale/` while the registry id is `whale-girl` — the two names differ |
+| `whale-girl-refined` | 鲸鱼娘（精致版） | MIT | ✅ | An AI-assisted derivative with repaired and refined details, based on the whale-girl design direction. ⚠️ the directory is `assets/whale-refined/` |
+| `doro` | doro | MIT ⚠️ | ❌ | Frames2d gameplay pet (contributed by stushansusu under MIT): 11 tracks / 802 frames of 42 ms webp sequences. Doro is an unofficial, fan-made derivative of Dorothy from *Goddess of Victory: Nikke*; the character and all related rights belong to SHIFT UP — personal non-commercial use only (see THIRD_PARTY_NOTICES.md) |
+| `jyn` | 女仆鲸鱼娘 | MIT | ❌ | Frames2d gameplay pet (contributed by stushansusu under MIT): maid-whale desktop pet with work/sleep/touch gameplay and three selectable skins (暗夜鎏金 / 蓝海霓裳 / 冰晶公主) |
+| `jyn-foxtail` | 鲸鱼娘·狗尾巴草 | MIT | ❌ | Frames2d gameplay pet (contributed by stushansusu under MIT): papercut whale-girl with thirteen 3.00 s frame tracks carrying click, work, sleep and idle-director gameplay |
+| `miku` | Miku | MIT ⚠️ | ❌ | Frames2d gameplay pet. Character rights belong to Crypton Future Media under the Piapro Character License |
+| `starry-doll` | 星夜人偶 | **CC-BY-NC-SA-4.0** | ❌ | Contributed by Theater-ahyeon: sprite2d gothic starry doll, cut from a single illustration and animated with paper-doll transforms. **Non-commercial only** |
+| `long-niang` | 娘惹 | **CC-BY-NC-SA-4.0** | ❌ | sprite2d. **Non-commercial only** |
+
+### Distribution discipline (the `package.json#files` whitelist)
+
+`npm publish` packages only the 6 whitelisted assets: `whale`, `whale-refined`,
+`ouo-neko`, `blue-throated-bee-eater`, `decorations`, `agint`.
+
+**The repository actually holds 12 asset directories. 6 are held back by the
+whitelist** and do not ship: `doro`, `jyn`, `jyn-foxtail`, `long-niang`,
+`miku`, `starry-doll`.
+
+⚠️ The two CC-BY-NC-SA-4.0 assets (`starry-doll`, `long-niang`) are **not
+licensed for commercial use**. `doro` and `miku` carry an MIT code license but
+still have **character-rights restrictions** (unofficial fan renditions). Read
+`THIRD_PARTY_NOTICES.md` before redistributing anything.
+
+⛔ The whitelist is a list you must maintain by hand: **adding your own asset
+means adding it to `files` too.** This bit once on 2026-10-05 — `assets/agint`
+was not whitelisted, so the 57 frames were in the repository while `npm pack`
+would have dropped every one of them.
 
 The Miku pet is deliberately not bundled: it is a frames2d gameplay pet installed on demand from the Workshop (see the frames2d section above). The **Starry Doll pet** (星夜人偶, contributed by Theater-ahyeon under CC-BY-NC-SA-4.0) is likewise Workshop-only: a sprite2d gothic starry doll cut out from a single illustration and animated with paper-doll transforms (breath, hop, wave, droop, and a review-state magnifier); install it from the Workshop's pet list and it lands in `$DSH_HOME/pets/starry-doll/`. The **Doro pet** (built in) is likewise unofficial fan artwork derived from Dorothy (*Goddess of Victory: Nikke*); the character and its rights belong to SHIFT UP and the assets are personal non-commercial use only — see THIRD_PARTY_NOTICES.md.
 
