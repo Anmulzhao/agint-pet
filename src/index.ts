@@ -16,20 +16,28 @@ import { Context, type Volatile } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
-import { PET_SETTINGS_NAMESPACE, PetService, type PetConfig, type PetSettingsSection } from './service.ts'
+import { DEFAULT_STATUS_BUBBLE_MODE, PET_SETTINGS_NAMESPACE, PetService, STATUS_BUBBLE_MODES, statusBubbleMode, type PetConfig, type PetSettingsSection, type PetStatusBubbleMode } from './service.ts'
 import { makePetRoutes } from './routes.ts'
 import { loadPetRegistry, petPackageRoot } from './registry.ts'
 import { BUBBLE_SCALE_MAX, BUBBLE_SCALE_MIN, DEFAULT_PET_ID, DISPLAY_INSET_MAX, DISPLAY_SIZE_MAX, DISPLAY_SIZE_MIN, type PetDisplayConfig } from './persist.ts'
 import { mountOnce } from './mount-once.ts'
 
-export { PetService, MAX_SESSION_BUBBLES } from './service.ts'
+export { PetService, MAX_SESSION_BUBBLES, DEFAULT_STATUS_BUBBLE_MODE, STATUS_BUBBLE_MODES, statusBubbleMode } from './service.ts'
 export type {
   PetConfig,
   PetInteractResult,
   PetSettingsSection,
   PetSessionView,
   PetStateView,
+  PetStatusBubbleMode,
 } from './service.ts'
+export { MAX_PANEL_ACTIONS, PanelActionRegistry, normalizePanelAction } from './panel-actions.ts'
+export type {
+  PetPanelActionContext,
+  PetPanelActionHandler,
+  PetPanelActionRegistration,
+  PetPanelActionView,
+} from './panel-actions.ts'
 export {
   AFFINITY_MAX,
   AFFINITY_RANKS,
@@ -133,6 +141,7 @@ export const PET_FORM_DEFAULTS = {
   petId: DEFAULT_PET_ID,
   enabled: true,
   decorationEnabled: true,
+  statusBubbles: DEFAULT_STATUS_BUBBLE_MODE,
 } as const
 
 /**
@@ -149,6 +158,12 @@ export interface PetFormConfig {
   enabled?: LiveField<boolean>
   /** Status-decoration master switch (pet-center M5, #567); defaults to on. */
   decorationEnabled?: LiveField<boolean>
+  /**
+   * Whether the pet renders its own session/status bubbles (issue #6);
+   * defaults to 'auto', which is exactly the behavior that shipped before
+   * the switch existed.
+   */
+  statusBubbles?: LiveField<PetStatusBubbleMode | undefined>
   /** Master switch for the pet surface. */
   visible?: LiveField<boolean>
   /** Scale of the rendered pet in px (sprite cell height). */
@@ -189,6 +204,11 @@ export const Config = z.object({
   petId: z.string().volatile(),
   enabled: z.boolean().default(PET_FORM_DEFAULTS.enabled).volatile(),
   decorationEnabled: z.boolean().default(PET_FORM_DEFAULTS.decorationEnabled).volatile(),
+  // The pet's own session/status bubbles (issue #6). 'auto' is the shipped
+  // behavior; 'off' is the opt-in a user (or a plugin that drives its own
+  // bubble surface) needs, and it hides ONLY those bubbles — the sprite, the
+  // interaction feedback and a sibling plugin's announcement bubble stay.
+  statusBubbles: z.union([...STATUS_BUBBLE_MODES]).default(PET_FORM_DEFAULTS.statusBubbles).volatile(),
 })
 
 /**
@@ -283,6 +303,11 @@ export function petSettingsSection(
     petId: readLive(config.petId, fallbackPetId),
     enabled,
     decorationEnabled: readLive(config.decorationEnabled, PET_FORM_DEFAULTS.decorationEnabled),
+    // Not a display field: the bubble switch has no persisted pet.json twin
+    // (it is a plugin-level rendering preference, like `decorationEnabled`),
+    // so it reads the live value directly and normalizes anything unknown to
+    // the shipped default instead of trusting the document.
+    statusBubbles: statusBubbleMode(readLive<PetStatusBubbleMode | undefined>(config.statusBubbles, undefined)),
   }
 }
 
@@ -344,6 +369,7 @@ function applyImpl(ctx: Context, config: PetPluginConfig = {}): void {
     ...config,
     enabled: readLive(config.enabled, PET_FORM_DEFAULTS.enabled),
     decorationEnabled: readLive(config.decorationEnabled, PET_FORM_DEFAULTS.decorationEnabled),
+    statusBubbles: statusBubbleMode(readLive<PetStatusBubbleMode | undefined>(config.statusBubbles, undefined)),
     registry,
   })
   // The mirror back into the settings document (see syncSettingsFromPet) has to

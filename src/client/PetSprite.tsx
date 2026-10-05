@@ -50,6 +50,13 @@ export interface PetSpriteProps {
   onDraggingChange?: (dragging: boolean) => void
   /** Rename the selected pet (persisted by the host). */
   onRename: (name: string) => void
+  /**
+   * Report a click on one plugin-registered action (issue #6). The buttons
+   * themselves come from the state snapshot's `panelActions` slice, so the
+   * panel renders exactly the registrations the host serves and adds nothing
+   * of its own.
+   */
+  onPanelAction: (id: string) => void
   /** Navigate to the session one status bubble reports on. */
   onOpenSession: (sessionId: string) => void
   /** Clear the reaction bubble (after its CSS animation). */
@@ -616,11 +623,18 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
   // is hovered/pinned open. The legacy single 'bubble' is the fallback when
   // the host serves no per-session list. The hover panel normally sits below
   // the sprite, so the bubbles stay visible and clickable — no region swap.
-  const sessionBubbles = snapshot?.sessions ?? []
+  // Whether the pet renders its OWN session/status bubbles (issue #6). Only
+  // these are gated: the interaction feedback bubble and a sibling plugin's
+  // announcement bubble are separate surfaces and keep rendering, so a plugin
+  // that drives its own bubble can switch the built-in ones off. A host that
+  // predates the field serves no mode at all, which reads as 'auto' — the
+  // behavior that shipped before the switch existed.
+  const statusBubblesOn = (snapshot?.statusBubbles ?? 'auto') !== 'off'
+  const sessionBubbles = statusBubblesOn ? (snapshot?.sessions ?? []) : []
   const stackOpen = stackPeek || stackPinned
   const collapsed = !stackOpen && sessionBubbles.length > 1
   const visibleSessions = collapsed ? sessionBubbles.slice(0, 1) : sessionBubbles
-  const statusBubble = feedback === null && sessionBubbles.length === 0
+  const statusBubble = statusBubblesOn && feedback === null && sessionBubbles.length === 0
     ? snapshot?.bubble
     : undefined
   // The freshest plugin-authored announcement (dsh-usage linkage): a
@@ -936,6 +950,24 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
                     {props.t('pet.gameplay.menu')}
                   </button>
                 )}
+                {/*
+                  Plugin-registered actions (issue #6). They follow the built-in
+                  ones so the pet's own row keeps its fixed order, and they
+                  carry their registration id as a data attribute so a test (or
+                  a skin) can address one action without depending on its label.
+                */}
+                {(snapshot?.panelActions ?? []).map(action => (
+                  <button
+                    key={action.id}
+                    type="button"
+                    className={styles.action}
+                    data-dsh-pet-panel-action={action.id}
+                    {...(action.title === undefined ? {} : { title: action.title })}
+                    onClick={() => { props.onPanelAction(action.id) }}
+                  >
+                    {action.label}
+                  </button>
+                ))}
               </div>
             </>
           )}
