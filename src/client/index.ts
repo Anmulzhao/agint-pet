@@ -178,19 +178,26 @@ class DeferredSettingsForm implements ConfigForm<PetSettings> {
     this.ctx = ctx
     this.fallback = ctx.configForms.get<PetSettings>(this.resolveFallbackEntryId())
     // No binder yet: the aggregate publishes it after an async mount, so keep
-    // probing. A shared form that can answer for itself is adopted at once.
+    // probing. A shared form that can already answer for itself is adopted at
+    // once; one still loading has simply not been filled in yet.
     if (!this.resolve() && !this.fallbackSettled()) this.scheduleRetry()
     else if (this.current === undefined) this.adoptFallback()
   }
 
   /**
-   * True while the shared mirror reports the pet namespace unavailable — the
-   * only state in which waiting can still help. A fallback that is ready (or
-   * merely loading, which the mirror fills in on its own) is adopted at once.
+   * True only once the shared mirror answers for the pet namespace itself.
+   *
+   * 'ready' is the only state that answers (#1813). A host-persisted row starts
+   * out as 'loading' — the mirror has published no view yet — and that is not
+   * an answer: adopting it on sight drops the retry window, and under the
+   * aggregate, which serves only the renamed 'web-ui-pet' row, the form then
+   * settles into 'unavailable' and the page stays "not exposed" for good. So
+   * 'loading' and 'unavailable' both keep the window open and let the binder be
+   * adopted the moment the aggregate publishes it.
    */
   private fallbackSettled(): boolean {
     try {
-      return this.fallback.getSnapshot().status !== 'unavailable'
+      return this.fallback.getSnapshot().status === 'ready'
     } catch {
       return false
     }
@@ -243,9 +250,10 @@ class DeferredSettingsForm implements ConfigForm<PetSettings> {
   }
 
   /**
-   * Adopt the shared per-entry form. It is used immediately unless it reports
-   * the namespace unavailable, in which case the binder may still be on its way
-   * and the retry window takes over (see scheduleRetry).
+   * Adopt the shared per-entry form. It is used immediately unless it cannot
+   * answer yet (still loading, or reporting the namespace unavailable), in which
+   * case the binder may still be on its way and the retry window takes over
+   * (see scheduleRetry).
    */
   private adoptFallback(): void {
     this.current = this.fallback

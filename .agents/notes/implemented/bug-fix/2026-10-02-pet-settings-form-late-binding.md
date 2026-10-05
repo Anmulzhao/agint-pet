@@ -59,11 +59,31 @@ contract and delegates every member to whichever form is currently real:
   publish later.
 
 Waiting is conditional, and this is the part that keeps the fix from trading one
-regression for another: the retry loop runs **only while the shared form actually
-reports `unavailable`**. A standalone install — where the plugin's own row id
-*is* the served key and the fallback answers `ready` on the first read — adopts
-it immediately and never waits. An unconditional wait window would have delayed
+regression for another: the retry loop runs **only while the shared form cannot
+answer yet**. A standalone install — where the plugin's own row id *is* the
+served key and the fallback answers `ready` on the first read — adopts it
+immediately and never waits. An unconditional wait window would have delayed
 every standalone install by the full window for a binder that is never coming.
+
+### Follow-up: `loading` is not an answer (#1813)
+
+The first version of that condition asked for `status !== 'unavailable'`, which
+counts `loading` as settled. The official per-row `ConfigForm` starts a
+host-persisted row out as `loading` — its `derive()` returns before the mirror
+has a `view` — so on the loopback page the fallback read `loading` at
+`apply()` time, the constructor adopted it, and `scheduleRetry()` was never
+armed. When the mirror then answered, the aggregate's served key is the renamed
+`web-ui-pet` row, so the `pet` alias settled into `unavailable` and the page
+kept showing "not exposed" — the same defect this note was written to close,
+reached through the new code path. The reported A/B on one machine changed only
+that line and the red text went away.
+
+The condition is therefore `status === 'ready'`: the single state in which the
+fallback can answer for itself. Both `loading` and `unavailable` keep the
+window open, so the binder is adopted the moment the aggregate publishes it; a
+fallback that reaches `ready` mid-window is still adopted at once by the same
+branch `scheduleRetry()` already had. The window is bounded, and exhaustion
+still settles on the served-id fallback exactly as before.
 
 ## Alternatives considered
 
@@ -101,6 +121,11 @@ every standalone install by the full window for a binder that is never coming.
   binder is published *after* `apply()` and the form must rebind to `pet`.
   Verified by reverting to single-probe behaviour, against which it fails
   (`boundNamespaces()` is `[]`), and passes with the fix.
+- A second regression test pins the `#1813` branch: the fallback answers
+  `loading`, then `unavailable` (the aggregate's view, whose served key the
+  `pet` alias never matches), and the form must still bind `pet` once the
+  binder appears. Reverting the predicate to `!== 'unavailable'` fails it with
+  `expected [] to deeply equal [ 'pet' ]` — the reported symptom, reproduced.
 - Verification: `pnpm typecheck` clean, `pnpm test` 568 passed / 46 files,
   `pnpm build` emits `DeferredSettingsForm` into `lib/client.js`.
 - Not covered: no live GUI verification. The profile running on this machine
@@ -114,9 +139,12 @@ every standalone install by the full window for a binder that is never coming.
 - The aggregate-side ordering remains unchanged. Other independently-applied
   packages can depend on services that the aggregate's inlined children publish
   after the same await, and this note fixes only the pet's own dependency.
-- `mountClientChildren`'s `ownClientEntryIds()` treats a package id appearing
-  in `__DSH_BOOT__.entries` as proof the loader serves that child, and skips
-  mounting it. A package injected through another plugin's `dsh.client.inject`
-  lands in those entries, so the inlined child (and the services it publishes)
-  is skipped with nothing taking its place. Reported alongside this issue; not
-  addressed here.
+- Closed: the earlier revision of this note claimed that
+  `mountClientChildren`'s `ownClientEntryIds()` skips an inlined child whose id
+  appears in `__DSH_BOOT__.entries` (a package injected through another
+  plugin's `dsh.client.inject`). It does not. The boot list is filtered, so a
+  family child package written into another plugin's `dsh.client.inject` never
+  reaches it; the loader only builds a dependency edge for a package that
+  already has a graph row, and the server-side ordering reads `external` alone.
+  That `inject` is therefore inert, and the claim is withdrawn rather than
+  carried as an open gap.
