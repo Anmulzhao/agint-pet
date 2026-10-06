@@ -48,12 +48,14 @@ import {
   petEntryView,
   petPackageRoot,
   type PetDefinition,
+  type PetEntry,
   type PetManifest,
   type PetRegistry,
   type PetRegistryDiagnostic,
 } from './registry.ts'
 import { WHISPER_TTL_MS, type VoicePackOverrides, type VoicePoolsProvider } from './chatter.ts'
 import { mergeVoicePacks } from './voice-pack.ts'
+import type { PetRemarks } from './remarks.ts'
 import type { DecorationView } from './contracts/status-decoration.ts'
 import {
   defaultPetStateConfig,
@@ -402,12 +404,10 @@ export class PetService extends Service {
       persist = { ...persist, petId: this.registry.defaultEntry().id }
     }
     const selected = this.registry.byId(persist.petId) ?? this.registry.defaultEntry()
-    const voiceRemarks = mergeVoicePacks(this.registry.globalVoice, selected.voice)?.remarks
     const ledgerConfig: LedgerConfig = {
       affinity: config.affinity,
       treats: config.treats,
-      remarks: selected.remarks,
-      voiceRemarks,
+      ...this.remarkLayers(selected),
     }
     this.ledger = new PetLedger(persist, ledgerConfig)
     this.stateConfig = { ...defaultPetStateConfig, ...(config.state ?? {}) }
@@ -439,6 +439,30 @@ export class PetService extends Service {
   /** Whether the pet service consumes session activity while enabled. */
   isEnabled(): boolean {
     return this.enabled
+  }
+
+  /**
+   * The remark layers one pet contributes to the ledger: its manifest pools
+   * first, then the voice packs (a pet directory's voice.json over the global
+   * `$DSH_HOME/pets/.voice.json`). Every path that seats the ledger's remark
+   * pools resolves them here, so no call site can apply the manifest pools and
+   * silently drop the voice layer: doing that reverted a pet whose lines a voice
+   * pack had translated back to the built-in pools the moment the settings
+   * surface applied.
+   * @param entry - the pet whose remark pools apply.
+   * @returns the layers `PetLedger.setRemarks` takes.
+   */
+  private remarkLayers(entry: PetEntry): { remarks?: PetRemarks; voiceRemarks?: PetRemarks } {
+    return {
+      remarks: entry.remarks,
+      voiceRemarks: mergeVoicePacks(this.registry.globalVoice, entry.voice)?.remarks,
+    }
+  }
+
+  /** Re-seat the ledger's remark pools from one pet's layers. */
+  private applyRemarks(entry: PetEntry): void {
+    const layers = this.remarkLayers(entry)
+    this.ledger.setRemarks(layers.remarks, layers.voiceRemarks)
   }
 
   /** RPC: current pet state snapshot. */
@@ -584,8 +608,7 @@ export class PetService extends Service {
     const entry = this.registry.byId(petId)
     if (entry === undefined) return { ok: false, error: 'unknown-pet' }
     this.ledger.setPetId(entry.id)
-    const voiceRemarks = mergeVoicePacks(this.registry.globalVoice, entry.voice)?.remarks
-    this.ledger.setRemarks(entry.remarks, voiceRemarks)
+    this.applyRemarks(entry)
     this.flush()
     this.syncSettingsFromPet()
     return { ok: true, petId: entry.id }
@@ -974,7 +997,7 @@ export class PetService extends Service {
     const selected = typeof section.petId === 'string' ? this.registry.byId(section.petId) : undefined
     if (selected !== undefined) {
       this.ledger.setPetId(selected.id)
-      this.ledger.setRemarks(selected.remarks)
+      this.applyRemarks(selected)
     } else if (section.petId !== undefined) {
       // The stored selection names a pet the registry no longer has: keep the
       // current selection and repair the settings document.
