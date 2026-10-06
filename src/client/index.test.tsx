@@ -65,6 +65,8 @@ interface FakeClientLifecycle {
   setEnabled(enabled: boolean): void
   /** Namespaces the family settings binder was asked for (empty without one). */
   boundNamespaces(): string[]
+  /** Namespaces the framework translate seat was bound for. */
+  localeSeats(): string[]
   /** Publish the family settings binder, as the aggregate's async mount does. */
   publishFamilyBinder(enabled: boolean): void
   /** Move the shared mirror to another state and notify its subscribers. */
@@ -101,6 +103,7 @@ function fakeContext(options: FakeContextOptions = {}): FakeClientLifecycle {
   const settingsListeners = new Set<() => void>()
   const sessionListeners = new Set<() => void>()
   const boundNamespaces: string[] = []
+  const localeSeats: string[] = []
   let settingsValue: { enabled?: boolean } | undefined = options.enabled === undefined ? undefined : { enabled: options.enabled }
   // The family binder is published later in the aggregate race; the shared form
   // answers 'unavailable' until then, exactly as the wrongly-keyed fallback does.
@@ -167,7 +170,17 @@ function fakeContext(options: FakeContextOptions = {}): FakeClientLifecycle {
       disposers.push(cleanup)
       return cleanup
     },
-    locale: { register: () => () => {} },
+    locale: {
+      register: () => () => {},
+      // The framework translate seat for one namespace. The floating surface
+      // must be handed this function rather than the plugin's own zh/en
+      // dictionary, which resolves by <html lang> and sends every language
+      // except English to Chinese.
+      bind: (namespace: string) => {
+        localeSeats.push(namespace)
+        return (key: string) => 'seat:' + key
+      },
+    },
     // The family binder is optional (dsh-web-settings may be absent); both
     // answers are the shared per-entry form of this plugin's own profile entry.
     get: (name: string) => name === 'webUiSettings' && binderPublished ? familyBinder : undefined,
@@ -216,6 +229,7 @@ function fakeContext(options: FakeContextOptions = {}): FakeClientLifecycle {
     sessionsListenerCount: () => sessionListeners.size,
     setEnabled: (enabled: boolean) => { settingsValue = { enabled } },
     boundNamespaces: () => boundNamespaces,
+    localeSeats: () => localeSeats,
     publishFamilyBinder: (enabled: boolean) => {
       binderPublished = true
       settingsValue = { enabled }
@@ -235,6 +249,15 @@ describe('pet client apply', () => {
     const root = document.body.querySelector('[data-dsh-pet-root]')
     expect(root).not.toBeNull()
     expect(root!.getAttribute('data-dsh-plugin')).toBe('pet')
+  })
+
+  it('hands the floating entry the framework locale seat', () => {
+    const lifecycle = fakeContext()
+    apply(lifecycle.ctx)
+    // The floating surface has no session-scoped locale seat, so the mount has
+    // to bind the 'pet' namespace explicitly. Resolving copy from the plugin's
+    // own zh/en dictionary instead sent every language but English to Chinese.
+    expect(lifecycle.localeSeats()).toContain('pet')
   })
 
   it('keeps one global pet root when two client factories overlap (#785)', () => {
