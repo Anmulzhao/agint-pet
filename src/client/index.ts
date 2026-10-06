@@ -42,7 +42,7 @@ import { live2dRenderer } from './renderers/live2d.ts'
 import { frames2dRenderer } from './renderers/frames2d.ts'
 import { registerPetUiTeardown, takeoverPetUiTeardown } from './ui-teardown.ts'
 import { PetSettingsSection, PetSettingsCardController, type PetSettings } from './PetSettingsCard.tsx'
-import { NS, en, zh, t } from './locales.ts'
+import { NS, en, zh } from './locales.ts'
 import { mainViewSessionId } from './main-session.ts'
 import { reportDailyHeartbeat } from './telemetry.ts'
 
@@ -653,7 +653,16 @@ export function apply(ctx: ClientContext): void {
       // root then owns the whole surface, so a root-keyed suppressor (the
       // portrait mobile layer, which hides [data-dsh-plugin="pet"]) really
       // hides the sprite instead of missing the portaled float.
-      petRoot.render(createElement(PetDockEntry, { ...injected(), t, portalTarget: container }))
+      //
+      // The floating surface has no session-scoped locale seat, so it must be
+      // handed the framework one explicitly. Resolving its copy from the
+      // plugin's own zh/en dictionary keyed on <html lang> sent every
+      // registered language except English to Chinese: a ru/ja/de page showed a
+      // Chinese panel while the settings card beside it was translated. Binding
+      // the 'pet' namespace instead follows the active language, the English
+      // fallback, and every language pack that registers a dictionary for it
+      // (the settings section label already resolves through the same seat).
+      petRoot.render(createElement(PetDockEntry, { ...injected(), t: ctx.locale.bind(NS), portalTarget: container }))
 
       let uiGone = false
       disposeUi = () => {
