@@ -8,7 +8,7 @@
  * translated answered from the built-in pools again as soon as the settings
  * surface applied - which is immediately, since it applies on every change.
  */
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -37,6 +37,34 @@ function fakeRootContext(): Context {
 function serviceWithVoicePack(remarks: Record<string, string[]>): PetService {
   const petsDir = tempDir()
   writeFileSync(join(petsDir, '.voice.json'), JSON.stringify({ voicePackVersion: 1, remarks }))
+  const registry = loadPetRegistry({
+    packageRoot: petPackageRoot(import.meta.url),
+    petsDir: '',
+    dshPetsDir: petsDir,
+  })
+  return new PetService(fakeRootContext(), { registry, persistDir: tempDir() })
+}
+
+/**
+ * A service over the shipped pets plus one temporary pet directory whose pet.json
+ * declares no remark pools and whose voice.json carries them - the writing the
+ * voice-pack docs recommend (a pet's lines live in one place). `petsDir` is
+ * disabled so the legacy hatch-pet source cannot leak the machine's own pets.
+ */
+function serviceWithPetVoicePack(id: string, remarks: Record<string, string[]>): PetService {
+  const petsDir = tempDir()
+  const petDir = join(petsDir, id)
+  mkdirSync(petDir, { recursive: true })
+  writeFileSync(join(petDir, 'pet.json'), JSON.stringify({
+    petManifestVersion: 2,
+    id,
+    displayName: 'Mumbler',
+    license: 'CC0-1.0',
+    renderer: 'sprite2d',
+    sprite2d: { spritesheetPath: 'spritesheet.webp' },
+  }), 'utf8')
+  writeFileSync(join(petDir, 'spritesheet.webp'), 'webp', 'utf8')
+  writeFileSync(join(petDir, 'voice.json'), JSON.stringify({ voicePackVersion: 1, remarks }), 'utf8')
   const registry = loadPetRegistry({
     packageRoot: petPackageRoot(import.meta.url),
     petsDir: '',
@@ -80,6 +108,21 @@ describe('PetService remark layers', () => {
 
     expect(other).toBeDefined()
     expect(await service.setPetId(other!.id)).toEqual({ ok: true, petId: other!.id })
+    expect((await service.interact('feed')).reaction).toBe(voice.noTreats[0])
+  })
+
+  it('user keeps a pet-directory voice pack remarks after the settings surface applies a section', async () => {
+    const voice = { pet: ['呼……好多了'], noTreats: ['现在不困啦～'] }
+    const service = serviceWithPetVoicePack('mumbler', voice)
+
+    // The reported repro (issue #10): the pet declares no remarks in pet.json,
+    // so its own voice pack is the only layer, and the settings surface applies
+    // a committed section on every change - that apply seats the pet and its
+    // pools. The voice layer has to survive it, or the pet answers from the
+    // built-in pools while its panel copy stays translated.
+    service.applySettingsSection(section('mumbler'))
+    expect(service.selectedPetId()).toBe('mumbler')
+    expect((await service.interact('pet')).reaction).toBe(voice.pet[0])
     expect((await service.interact('feed')).reaction).toBe(voice.noTreats[0])
   })
 })

@@ -76,7 +76,13 @@ stayed translated.
   (`localeSeats()` contains `pet`). Reverting the two source changes fails
   exactly these tests — the client one with `localeSeats()` empty, the service
   one with a built-in line where the voice line belongs.
-- Verification: `pnpm typecheck` clean, `pnpm test` 619 passed / 49 files,
+- Two cases cover the two voice-pack layers separately. The global case writes
+  `$DSH_HOME/pets/.voice.json`; the per-pet case (#10) writes a pet directory's
+  `voice.json` with a pet.json that declares no `remarks` — the writing the
+  voice-pack docs recommend, and the one the report came from. The per-pet case
+  is the one that holds if a future edit drops `entry.voice` from
+  `remarkLayers`: the global case alone would still pass.
+- Verification: `pnpm typecheck` clean, `pnpm test` 620 passed / 49 files,
   `pnpm build` emits the bound seat into `lib/client.js`.
 - Environment note, not touched here: `tests/service-enabled.spec.ts` builds its
   service without a registry fixture, so it reads the machine's `$DSH_HOME/pets`.
