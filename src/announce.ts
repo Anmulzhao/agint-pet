@@ -4,6 +4,11 @@
  * validates it into a bounded payload, and the browser half renders it as a
  * dedicated, specially styled bubble above the session bubble stack.
  *
+ * One slot per publisher (issue #1812): `source` is the slot key, so two
+ * announcing plugins coexist instead of displacing each other, and each keeps
+ * its own TTL. The single-slot contract this replaced is kept on the wire as
+ * the freshest entry, so an older browser half keeps working unchanged.
+ *
  * The validation lives in this pure module so the wire contract has exactly
  * one home and stays testable without the cordis service.
  * @module @linxin666/dsh-pet/announce
@@ -35,6 +40,18 @@ export interface PetAnnouncement {
 
 /** Default freshness window. */
 export const ANNOUNCE_DEFAULT_TTL_MS = 10_000
+
+/**
+ * How many publishers can hold an announcement bubble at once (issue #1812).
+ *
+ * The contract has exactly one slot per `source` — that is the whole upgrade
+ * from the single-slot design — but the pet's bubble stack is a finite column,
+ * so the table is bounded rather than open. The bound is deliberately above the
+ * realistic publisher count (a quota bubble, a balance bubble, a notification):
+ * it exists so a misbehaving publisher that rotates `source` per bubble cannot
+ * grow the pet's stack without limit.
+ */
+export const MAX_ANNOUNCEMENTS = 4
 
 /**
  * Hard TTL ceiling. A repeating announcer declares its poll cadence as

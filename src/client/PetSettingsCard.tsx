@@ -37,6 +37,8 @@ export interface PetSettings {
   petId?: string
   /** Status-decoration master switch (pet-center M5, #567). */
   decorationEnabled?: boolean
+  /** Whether the pet's own session/status bubbles render (issue #6). */
+  statusBubbles?: string
 }
 
 /** What the pet settings card renders. */
@@ -59,6 +61,8 @@ export interface PetSettingsCardState extends CardShell {
   petId: CardFieldState
   /** Status-decoration master switch. */
   decorationEnabled: CardFieldState
+  /** Whether the pet's own session/status bubbles render. */
+  statusBubbles: CardFieldState
   /** Pet choices (registry ids + display names), loaded from the host. */
   petChoices: readonly { value: string; label: string }[]
 }
@@ -70,6 +74,13 @@ export interface PetSettingsCardFace extends CardActions {
     petSettingsCard: SnapshotStore<PetSettingsCardState>
   }
 }
+
+/**
+ * The bubble modes this card can write, in render order. Mirrors the host
+ * schema's union (see PetStatusBubbleMode); the browser half never imports the
+ * host module for a value, so the accepted set is spelled here as literals.
+ */
+const STATUS_BUBBLE_CHOICES = ['auto', 'off'] as const
 
 /** One registry choice as served by '/api/pet/pets'. */
 interface PetChoice {
@@ -128,6 +139,11 @@ export class PetSettingsCardController {
     this.form = new CardForm(scope, [
       booleanField('enabled'),
       booleanField('decorationEnabled'),
+      // The bubble switch is a two-value mode, not a boolean: 'off' is the
+      // opt-out, and a future mode (say, one that keeps only the current
+      // session's bubble) has to be able to join the same field without
+      // breaking every settings document already written.
+      choiceField('statusBubbles', STATUS_BUBBLE_CHOICES),
       booleanField('visible'),
       numberField('size'),
       numberField('right'),
@@ -268,6 +284,7 @@ export class PetSettingsCardController {
       petSelectionFallback: fallback,
       enabled: this.form.field('enabled'),
       decorationEnabled: this.form.field('decorationEnabled'),
+      statusBubbles: this.form.field('statusBubbles'),
       visible: fallback ? this.fallbackVisible() : this.form.field('visible'),
       size: this.form.field('size'),
       right: this.form.field('right'),
@@ -386,6 +403,20 @@ export function PetSettingsCard(props: PetSettingsCardProps) {
         {...state.decorationEnabled}
         onEdit={(text) => { props.edit('decorationEnabled', text) }}
         onReset={() => { props.resetField('decorationEnabled') }}
+      />}
+      {state.petSelectionFallback ? null : <ChoiceField
+        id="settings-pet-status-bubbles"
+        label={t('settings.statusBubbles')}
+        hint={t('settings.statusBubblesHint')}
+        inheritLabel={t('settings.inherit')}
+        {...fieldProps}
+        {...state.statusBubbles}
+        choices={[
+          { value: STATUS_BUBBLE_CHOICES[0], label: t('settings.on') },
+          { value: STATUS_BUBBLE_CHOICES[1], label: t('settings.off') },
+        ]}
+        onEdit={(text) => { props.edit('statusBubbles', text) }}
+        onReset={() => { props.resetField('statusBubbles') }}
       />}
       <ChoiceField
         id="settings-pet-pet"

@@ -50,6 +50,13 @@ export interface PetSpriteProps {
   onDraggingChange?: (dragging: boolean) => void
   /** Rename the selected pet (persisted by the host). */
   onRename: (name: string) => void
+  /**
+   * Report a click on one plugin-registered action (issue #6). The buttons
+   * themselves come from the state snapshot's `panelActions` slice, so the
+   * panel renders exactly the registrations the host serves and adds nothing
+   * of its own.
+   */
+  onPanelAction: (id: string) => void
   /** Navigate to the session one status bubble reports on. */
   onOpenSession: (sessionId: string) => void
   /** Clear the reaction bubble (after its CSS animation). */
@@ -616,20 +623,30 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
   // is hovered/pinned open. The legacy single 'bubble' is the fallback when
   // the host serves no per-session list. The hover panel normally sits below
   // the sprite, so the bubbles stay visible and clickable — no region swap.
-  const sessionBubbles = snapshot?.sessions ?? []
+  // Whether the pet renders its OWN session/status bubbles (issue #6). Only
+  // these are gated: the interaction feedback bubble and a sibling plugin's
+  // announcement bubble are separate surfaces and keep rendering, so a plugin
+  // that drives its own bubble can switch the built-in ones off. A host that
+  // predates the field serves no mode at all, which reads as 'auto' — the
+  // behavior that shipped before the switch existed.
+  const statusBubblesOn = (snapshot?.statusBubbles ?? 'auto') !== 'off'
+  const sessionBubbles = statusBubblesOn ? (snapshot?.sessions ?? []) : []
   const stackOpen = stackPeek || stackPinned
   const collapsed = !stackOpen && sessionBubbles.length > 1
   const visibleSessions = collapsed ? sessionBubbles.slice(0, 1) : sessionBubbles
-  const statusBubble = feedback === null && sessionBubbles.length === 0
+  const statusBubble = statusBubblesOn && feedback === null && sessionBubbles.length === 0
     ? snapshot?.bubble
     : undefined
-  // The freshest plugin-authored announcement (dsh-usage linkage): a
-  // dedicated, specially styled bubble above the session stack. The host
-  // already TTL-filters; this client-side check covers the last poll tick.
-  const announcement = snapshot?.announcement
-  const usageAnnouncement = feedback === null && announcement !== undefined && announcementFresh(announcement, Date.now())
-    ? announcement
-    : undefined
+  // The plugin-authored announcements: one dedicated, specially styled bubble
+  // per publishing plugin above the session stack (issue #1812 — the contract
+  // used to hold a single slot, so a second publisher displaced the first).
+  // The host already TTL-filters; this client-side check covers the last poll
+  // tick. A host predating the array serves the singular field only, and a
+  // browser half predating it (this file, before the upgrade) renders the same
+  // one bubble, so neither side of a rolling upgrade loses a publisher.
+  const announced = snapshot?.announcements ?? (snapshot?.announcement !== undefined ? [snapshot.announcement] : [])
+  const now = Date.now()
+  const usageAnnouncements = feedback === null ? announced.filter(entry => announcementFresh(entry, now)) : []
   // Each session's inner whisper (碎碎念) rides its own bubble — short
   // inner-voice copy woken by that session's activity, never the model's or
   // another session's. Instead of a second bubble of its own, a fresh
@@ -637,7 +654,7 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
   // never wears two voices at once. Interaction feedback takes over the
   // whole bubble area while it plays, so whispers yield to it like status
   // copy.
-  const bubblePresent = feedback !== null || sessionBubbles.length > 0 || statusBubble !== undefined || usageAnnouncement !== undefined
+  const bubblePresent = feedback !== null || sessionBubbles.length > 0 || statusBubble !== undefined || usageAnnouncements.length > 0
   const displayName = snapshot?.name ?? definition.displayName
   // The host-served status decoration (M5, #567); absent = text-only bubbles.
   const decoration = snapshot?.decoration
@@ -754,7 +771,7 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
           {feedback.text}
         </div>
       )}
-      {feedback === null && (sessionBubbles.length > 0 || statusBubble !== undefined || usageAnnouncement !== undefined) && (
+      {feedback === null && (sessionBubbles.length > 0 || statusBubble !== undefined || usageAnnouncements.length > 0) && (
         <div
           ref={bubbleRef}
           className={styles.bubbleStack}
@@ -825,7 +842,16 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
               {statusBubble}
             </div>
           )}
-          {usageAnnouncement !== undefined && <UsageAnnouncementBubble announcement={usageAnnouncement} />}
+          {/*
+            One bubble per publishing plugin, in the order the host serves
+            them. Keyed by `source`, not by arrival: a repeating publisher
+            updates its own bubble in place instead of remounting (which would
+            replay the entrance animation on every poll), and two publishers on
+            different cadences keep their positions.
+          */}
+          {usageAnnouncements.map(entry => (
+            <UsageAnnouncementBubble key={entry.source} announcement={entry} />
+          ))}
         </div>
       )}
       {hovered && dragRef.current === null && (
@@ -936,6 +962,24 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
                     {props.t('pet.gameplay.menu')}
                   </button>
                 )}
+                {/*
+                  Plugin-registered actions (issue #6). They follow the built-in
+                  ones so the pet's own row keeps its fixed order, and they
+                  carry their registration id as a data attribute so a test (or
+                  a skin) can address one action without depending on its label.
+                */}
+                {(snapshot?.panelActions ?? []).map(action => (
+                  <button
+                    key={action.id}
+                    type="button"
+                    className={styles.action}
+                    data-dsh-pet-panel-action={action.id}
+                    {...(action.title === undefined ? {} : { title: action.title })}
+                    onClick={() => { props.onPanelAction(action.id) }}
+                  >
+                    {action.label}
+                  </button>
+                ))}
               </div>
             </>
           )}

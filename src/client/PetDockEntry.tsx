@@ -41,6 +41,12 @@ export interface PetInjected {
   dragEnd: (right: number, bottom: number) => void
   /** Rename the selected pet (persisted by the host). */
   rename: (name: string) => void
+  /**
+   * Report a click on one plugin-registered panel action (issue #6). The host
+   * dispatches it to the plugin that registered the action; the panel itself
+   * only renders the button the state snapshot served.
+   */
+  panelAction: (id: string) => void
   /** Navigate the GUI to the session a bubble reports on. */
   openSession: (sessionId: string) => void
   /** Clear the reaction bubble. */
@@ -116,6 +122,7 @@ export function PetDockEntry(props: PetDockEntryProps): ReactElement {
                 onHide={props.hide}
                 onDragEnd={props.dragEnd}
                 onRename={props.rename}
+                onPanelAction={props.panelAction}
                 onOpenSession={props.openSession}
                 onFeedbackDone={props.feedbackDone}
                 portalTarget={props.portalTarget}

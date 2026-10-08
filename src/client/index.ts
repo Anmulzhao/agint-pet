@@ -42,7 +42,7 @@ import { live2dRenderer } from './renderers/live2d.ts'
 import { frames2dRenderer } from './renderers/frames2d.ts'
 import { registerPetUiTeardown, takeoverPetUiTeardown } from './ui-teardown.ts'
 import { PetSettingsSection, PetSettingsCardController, type PetSettings } from './PetSettingsCard.tsx'
-import { NS, en, zh, t } from './locales.ts'
+import { NS, en, zh } from './locales.ts'
 import { mainViewSessionId } from './main-session.ts'
 import { reportDailyHeartbeat } from './telemetry.ts'
 
@@ -56,6 +56,7 @@ interface PetHttpApi {
   setConfig(patch: Partial<PetDisplayConfig>): Promise<{ ok: true; display: PetDisplayConfig }>
   setName(name: string): Promise<{ ok: true; name: string } | { ok: false; error: string }>
   setPet(petId: string): Promise<{ ok: true; petId: string } | { ok: false; error: string }>
+  panelAction(id: string): Promise<{ ok: boolean; error?: string }>
   setSkin(skin?: string): Promise<{ ok: boolean; error?: string; skin?: string }>
   gameplayTouch(zone?: string): Promise<PetGameplayVerbResult>
   gameplaySetMode(mode: string | null): Promise<PetGameplayVerbResult>
@@ -88,6 +89,7 @@ const petApi: PetHttpApi = {
   setConfig: (patch) => petFetch('/api/pet/set-config', patch),
   setName: (name) => petFetch('/api/pet/set-name', { name }),
   setPet: (petId) => petFetch('/api/pet/set-pet', { petId }),
+  panelAction: (id) => petFetch('/api/pet/panel-action', { id }),
   setSkin: (skin) => petFetch('/api/pet/set-skin', skin === undefined ? {} : { skin }),
   gameplayTouch: (zone) => petFetch('/api/pet/gameplay/touch', zone === undefined ? {} : { zone }),
   gameplaySetMode: (mode) => petFetch('/api/pet/gameplay/mode', { mode }),
@@ -176,19 +178,26 @@ class DeferredSettingsForm implements ConfigForm<PetSettings> {
     this.ctx = ctx
     this.fallback = ctx.configForms.get<PetSettings>(this.resolveFallbackEntryId())
     // No binder yet: the aggregate publishes it after an async mount, so keep
-    // probing. A shared form that can answer for itself is adopted at once.
+    // probing. A shared form that can already answer for itself is adopted at
+    // once; one still loading has simply not been filled in yet.
     if (!this.resolve() && !this.fallbackSettled()) this.scheduleRetry()
     else if (this.current === undefined) this.adoptFallback()
   }
 
   /**
-   * True while the shared mirror reports the pet namespace unavailable — the
-   * only state in which waiting can still help. A fallback that is ready (or
-   * merely loading, which the mirror fills in on its own) is adopted at once.
+   * True only once the shared mirror answers for the pet namespace itself.
+   *
+   * 'ready' is the only state that answers (#1813). A host-persisted row starts
+   * out as 'loading' — the mirror has published no view yet — and that is not
+   * an answer: adopting it on sight drops the retry window, and under the
+   * aggregate, which serves only the renamed 'web-ui-pet' row, the form then
+   * settles into 'unavailable' and the page stays "not exposed" for good. So
+   * 'loading' and 'unavailable' both keep the window open and let the binder be
+   * adopted the moment the aggregate publishes it.
    */
   private fallbackSettled(): boolean {
     try {
-      return this.fallback.getSnapshot().status !== 'unavailable'
+      return this.fallback.getSnapshot().status === 'ready'
     } catch {
       return false
     }
@@ -241,9 +250,10 @@ class DeferredSettingsForm implements ConfigForm<PetSettings> {
   }
 
   /**
-   * Adopt the shared per-entry form. It is used immediately unless it reports
-   * the namespace unavailable, in which case the binder may still be on its way
-   * and the retry window takes over (see scheduleRetry).
+   * Adopt the shared per-entry form. It is used immediately unless it cannot
+   * answer yet (still loading, or reporting the namespace unavailable), in which
+   * case the binder may still be on its way and the retry window takes over
+   * (see scheduleRetry).
    */
   private adoptFallback(): void {
     this.current = this.fallback
@@ -576,6 +586,19 @@ export function apply(ctx: ClientContext): void {
             // Ignore; next poll resyncs.
           })
         },
+        // A panel action click (issue #6) travels back to the host, which
+        // dispatches it to the plugin that registered the action. The plugin's
+        // own callback does the work; the browser half only reports the id, and
+        // the next poll brings back whatever that callback changed. A click on
+        // an action the plugin already disposed answers { ok: false } — the
+        // button was one poll tick stale, which is not a pet failure.
+        panelAction: (id) => {
+          petApi.panelAction(id).then((result) => {
+            if (result.ok) pollNow()
+          }, () => {
+            // Ignore; next poll resyncs.
+          })
+        },
         feedbackDone: () => {
           setFeedback(null)
         },
@@ -630,7 +653,16 @@ export function apply(ctx: ClientContext): void {
       // root then owns the whole surface, so a root-keyed suppressor (the
       // portrait mobile layer, which hides [data-dsh-plugin="pet"]) really
       // hides the sprite instead of missing the portaled float.
-      petRoot.render(createElement(PetDockEntry, { ...injected(), t, portalTarget: container }))
+      //
+      // The floating surface has no session-scoped locale seat, so it must be
+      // handed the framework one explicitly. Resolving its copy from the
+      // plugin's own zh/en dictionary keyed on <html lang> sent every
+      // registered language except English to Chinese: a ru/ja/de page showed a
+      // Chinese panel while the settings card beside it was translated. Binding
+      // the 'pet' namespace instead follows the active language, the English
+      // fallback, and every language pack that registers a dictionary for it
+      // (the settings section label already resolves through the same seat).
+      petRoot.render(createElement(PetDockEntry, { ...injected(), t: ctx.locale.bind(NS), portalTarget: container }))
 
       let uiGone = false
       disposeUi = () => {

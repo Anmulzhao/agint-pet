@@ -16,7 +16,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { AffinityConfig, PetAffinityView, PetInteraction } from './affinity.ts'
-import { announcementFresh, parseAnnouncement, type PetAnnouncement } from './announce.ts'
+import { announcementFresh, MAX_ANNOUNCEMENTS, parseAnnouncement, type PetAnnouncement } from './announce.ts'
 import type { TreatConfig } from './treats.ts'
 import {
   emptyProjectionRuntime,
@@ -27,6 +27,7 @@ import {
   type ProjectionRuntime,
 } from './event-projection.ts'
 import { PetLedger, type LedgerConfig, type LedgerInteractionResult } from './ledger.ts'
+import { PanelActionRegistry, type PetPanelActionRegistration, type PetPanelActionView } from './panel-actions.ts'
 import {
   DEFAULT_PET_NAME,
   DISPLAY_INSET_MAX,
@@ -47,12 +48,14 @@ import {
   petEntryView,
   petPackageRoot,
   type PetDefinition,
+  type PetEntry,
   type PetManifest,
   type PetRegistry,
   type PetRegistryDiagnostic,
 } from './registry.ts'
 import { WHISPER_TTL_MS, type VoicePackOverrides, type VoicePoolsProvider } from './chatter.ts'
 import { mergeVoicePacks } from './voice-pack.ts'
+import type { PetRemarks } from './remarks.ts'
 import type { DecorationView } from './contracts/status-decoration.ts'
 import {
   defaultPetStateConfig,
@@ -90,6 +93,8 @@ export interface PetConfig {
   enabled?: boolean
   /** Status-decoration master switch (pet-center M5, #567); defaults to on. */
   decorationEnabled?: boolean
+  /** Whether the pet's own session/status bubbles render (issue #6); defaults to 'auto'. */
+  statusBubbles?: PetStatusBubbleMode
   /** Prebuilt registry (tests); defaults to scanning the package + user dirs. */
   registry?: PetRegistry
   /** Extra manifest entries composed by the embedding application. */
@@ -123,6 +128,36 @@ export interface PetSettingsSection {
    * the settings surface mirrors this field and can turn it off.
    */
   decorationEnabled?: boolean
+  /** Whether the pet's own session/status bubbles render (issue #6). */
+  statusBubbles?: PetStatusBubbleMode
+}
+
+/**
+ * Whether the pet renders its own session/status bubbles (issue #6).
+ *
+ * `auto` is the shipped behavior: every active session keeps a bubble, and a
+ * sibling plugin's announcement bubble rides the same stack above them. `off`
+ * hides ONLY the pet's own bubbles — the announcement bubble, the interaction
+ * feedback bubble and the sprite itself are untouched — which is what a plugin
+ * that drives its own bubble surface needs. Anything unknown resolves to
+ * `auto`, so an older profile or a hand-edited settings document keeps the
+ * status bubbles rather than losing them silently.
+ */
+export type PetStatusBubbleMode = 'auto' | 'off'
+
+/** Every accepted {@link PetStatusBubbleMode}, in settings-card order. */
+export const STATUS_BUBBLE_MODES: readonly PetStatusBubbleMode[] = ['auto', 'off']
+
+/** The shipped default; the switch changes nothing until a user turns it off. */
+export const DEFAULT_STATUS_BUBBLE_MODE: PetStatusBubbleMode = 'auto'
+
+/**
+ * Normalize a stored, live or hand-edited bubble mode.
+ * @param value - the value the settings document carries, when any.
+ * @returns the effective mode; anything but 'off' renders the bubbles.
+ */
+export function statusBubbleMode(value: unknown): PetStatusBubbleMode {
+  return value === 'off' ? 'off' : DEFAULT_STATUS_BUBBLE_MODE
 }
 
 /** Settings namespace of the pet capability. Spelled here rather than imported: the browser half spells the same value. */
@@ -206,11 +241,36 @@ export interface PetStateView {
    */
   gameplay?: PetGameplayStateView
   /**
-   * The freshest plugin-authored announcement (dsh-usage linkage), within
-   * its TTL; absent when none is fresh. Rendered as a dedicated styled
-   * bubble above the session stack.
+   * The freshest plugin-authored announcement, within its TTL; absent when none
+   * is fresh. Rendered as a dedicated styled bubble above the session stack.
+   *
+   * Kept alongside `announcements` with exactly the meaning it had when the
+   * contract had a single slot, so a browser half predating the per-source
+   * upgrade keeps rendering one bubble instead of none (issue #1812). New
+   * readers should use `announcements`.
    */
   announcement?: PetAnnouncement
+  /**
+   * Every fresh plugin-authored announcement, one per publishing plugin, in
+   * render order (issue #1812). Absent when nothing is fresh, so a host with no
+   * publisher serves exactly what it served before the upgrade.
+   */
+  announcements?: PetAnnouncement[]
+  /**
+   * Whether the pet's own session/status bubbles render (issue #6). Absent
+   * on a host that predates the switch, which the browser half reads as
+   * `'auto'` — the behavior that shipped before it existed. Turning it to
+   * `'off'` hides those bubbles only; `announcement` and `bubble` (the
+   * legacy single status bubble) are still served, so the wire contract does
+   * not change with the display preference.
+   */
+  statusBubbles?: PetStatusBubbleMode
+  /**
+   * Actions a sibling plugin registered into the hover panel's action row
+   * (issue #6), in render order. Absent when none is registered, so the
+   * panel row is exactly what it was before the extension point existed.
+   */
+  panelActions?: PetPanelActionView[]
 }
 
 /** Result of `pet.interact`. */
@@ -277,8 +337,17 @@ export class PetService extends Service {
   private enabled: boolean
   /** Status-decoration master switch (M5, #567); mirrored from settings. */
   private decorationEnabled: boolean
-  /** The freshest plugin-authored announcement (dsh-usage linkage). */
-  private announcement: PetAnnouncement | undefined
+  /** Whether the pet renders its own session/status bubbles (issue #6). */
+  private statusBubbles: PetStatusBubbleMode
+  /**
+   * Plugin-authored announcements, one slot per `source` (issue #1812). The
+   * contract started as a single slot, where a second announcing plugin
+   * displaced the first; the map is the upgrade the design note predicted for
+   * exactly this moment. Insertion order is the render order and re-announcing
+   * a source updates its entry in place, so two publishers on different
+   * cadences never swap positions.
+   */
+  private readonly announcements = new Map<string, PetAnnouncement>()
   private disposeActivity: (() => void) | undefined
   /** Session whose most recent meaningful event currently drives the global pet. */
   private displaySession: Session | undefined
@@ -294,6 +363,13 @@ export class PetService extends Service {
    * disposed sessions are removed by the 'session/disposed' listener.
    */
   private readonly sessionActivity = new Map<Session, SessionActivity>()
+  /**
+   * Hover-panel actions registered by sibling plugins (issue #6). The pet owns
+   * the panel row and serves the registrations; each plugin owns the callback a
+   * click dispatches to. Bounded, in-memory, reclaimed with the registering
+   * plugin's disposer.
+   */
+  private readonly panelActions = new PanelActionRegistry()
   /**
    * Sessions whose reward source is the official event stream. This metadata
    * outlives transient visual resets so a derived legacy `done` cannot reward
@@ -328,18 +404,17 @@ export class PetService extends Service {
       persist = { ...persist, petId: this.registry.defaultEntry().id }
     }
     const selected = this.registry.byId(persist.petId) ?? this.registry.defaultEntry()
-    const voiceRemarks = mergeVoicePacks(this.registry.globalVoice, selected.voice)?.remarks
     const ledgerConfig: LedgerConfig = {
       affinity: config.affinity,
       treats: config.treats,
-      remarks: selected.remarks,
-      voiceRemarks,
+      ...this.remarkLayers(selected),
     }
     this.ledger = new PetLedger(persist, ledgerConfig)
     this.stateConfig = { ...defaultPetStateConfig, ...(config.state ?? {}) }
     this.machine = new PetStateMachine(this.stateConfig)
     this.enabled = config.enabled ?? true
     this.decorationEnabled = config.decorationEnabled ?? true
+    this.statusBubbles = statusBubbleMode(config.statusBubbles)
 
     this.syncActivity()
   }
@@ -366,22 +441,119 @@ export class PetService extends Service {
     return this.enabled
   }
 
+  /**
+   * The remark layers one pet contributes to the ledger: its manifest pools
+   * first, then the voice packs (a pet directory's voice.json over the global
+   * `$DSH_HOME/pets/.voice.json`). Every path that seats the ledger's remark
+   * pools resolves them here, so no call site can apply the manifest pools and
+   * silently drop the voice layer: doing that reverted a pet whose lines a voice
+   * pack had translated back to the built-in pools the moment the settings
+   * surface applied.
+   * @param entry - the pet whose remark pools apply.
+   * @returns the layers `PetLedger.setRemarks` takes.
+   */
+  private remarkLayers(entry: PetEntry): { remarks?: PetRemarks; voiceRemarks?: PetRemarks } {
+    return {
+      remarks: entry.remarks,
+      voiceRemarks: mergeVoicePacks(this.registry.globalVoice, entry.voice)?.remarks,
+    }
+  }
+
+  /** Re-seat the ledger's remark pools from one pet's layers. */
+  private applyRemarks(entry: PetEntry): void {
+    const layers = this.remarkLayers(entry)
+    this.ledger.setRemarks(layers.remarks, layers.voiceRemarks)
+  }
+
   /** RPC: current pet state snapshot. */
   async state(currentSessionId?: string): Promise<PetStateView> {
     return this.view(currentSessionId)
   }
 
   /**
-   * RPC: one plugin-authored announcement bubble (dsh-usage linkage). The
-   * payload is validated into a bounded PetAnnouncement; a malformed one is
-   * dropped silently — a sibling plugin's bug must never surface as pet
-   * breakage. The announcement is in-memory only.
+   * RPC: one plugin-authored announcement bubble, held in the publisher's own
+   * slot keyed by `source` (issue #1812). The payload is validated into a
+   * bounded PetAnnouncement; a malformed one is dropped silently — a sibling
+   * plugin's bug must never surface as pet breakage. Re-announcing replaces
+   * only the caller's own slot, so publishers coexist instead of displacing
+   * each other. Announcements are in-memory only.
+   *
+   * The slot table is bounded by {@link MAX_ANNOUNCEMENTS}. Expired entries are
+   * pruned first, so a silent publisher never holds a slot; when the table is
+   * genuinely full, the entry that has been silent longest gives up its slot
+   * to the arriving one — a publisher that keeps refreshing is never evicted.
    */
   announce(input: unknown): { ok: boolean } {
     const parsed = parseAnnouncement(input, Date.now())
     if (parsed === undefined) return { ok: false }
-    this.announcement = parsed
+    const now = Date.now()
+    for (const [source, entry] of this.announcements) {
+      if (!announcementFresh(entry, now)) this.announcements.delete(source)
+    }
+    if (!this.announcements.has(parsed.source) && this.announcements.size >= MAX_ANNOUNCEMENTS) {
+      let oldest = ''
+      let oldestAt = Number.POSITIVE_INFINITY
+      for (const [source, entry] of this.announcements) {
+        if (entry.at < oldestAt) {
+          oldest = source
+          oldestAt = entry.at
+        }
+      }
+      if (oldest !== '') this.announcements.delete(oldest)
+    }
+    this.announcements.set(parsed.source, parsed)
     return { ok: true }
+  }
+
+  /**
+   * The announcement slots still fresh, in render order. An expired entry
+   * simply stops appearing (the client's 2 s poll drops it); no timer owns its
+   * removal.
+   */
+  private freshAnnouncements(): PetAnnouncement[] {
+    const now = Date.now()
+    return [...this.announcements.values()].filter(entry => announcementFresh(entry, now))
+  }
+
+  /**
+   * Register one action into the hover panel's action row (issue #6). The pet
+   * renders the button and dispatches the click back to `onSelect`; the plugin
+   * decides what the button does. Registering is a wiring step, so a malformed
+   * registration throws at the caller's own apply instead of being dropped.
+   *
+   * The registration is reclaimed by the disposer, so the idiomatic call binds
+   * it to the registering plugin's fiber:
+   * ```ts
+   * ctx.effect(() => ctx.pet.registerPanelAction({
+   *   id: 'pet-quota-swap',
+   *   label: '换装',
+   *   onSelect: async () => { await cycleToNextPet(ctx.pet) },
+   * }))
+   * ```
+   * @param action - the registration to serve in the panel row.
+   * @returns a disposer that removes this registration.
+   * @throws when the id, label or callback is unusable, or the row is full.
+   */
+  registerPanelAction(action: PetPanelActionRegistration): () => void {
+    return this.panelActions.register(action)
+  }
+
+  /**
+   * RPC: dispatch one hover-panel action click back to the plugin that
+   * registered it. A rejected id is a stale click (the plugin disposed its
+   * registration between render and click), and a throwing callback is that
+   * plugin's own failure — neither may surface as pet breakage, so both answer
+   * `{ ok: false }` instead of throwing out of the route.
+   * @param id - the action id the browser half reported.
+   * @returns whether the click reached a registered action.
+   */
+  async selectPanelAction(id: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const selected = await this.panelActions.select(id, { petId: this.selectedPetId() })
+      return selected ? { ok: true } : { ok: false, error: 'unknown-panel-action' }
+    } catch {
+      return { ok: false, error: 'panel-action-failed' }
+    }
   }
 
   /** Current persisted display config (read-only view). */
@@ -436,8 +608,7 @@ export class PetService extends Service {
     const entry = this.registry.byId(petId)
     if (entry === undefined) return { ok: false, error: 'unknown-pet' }
     this.ledger.setPetId(entry.id)
-    const voiceRemarks = mergeVoicePacks(this.registry.globalVoice, entry.voice)?.remarks
-    this.ledger.setRemarks(entry.remarks, voiceRemarks)
+    this.applyRemarks(entry)
     this.flush()
     this.syncSettingsFromPet()
     return { ok: true, petId: entry.id }
@@ -822,10 +993,11 @@ export class PetService extends Service {
    */
   applySettingsSection(section: PetSettingsSection): void {
     this.decorationEnabled = section.decorationEnabled ?? true
+    this.statusBubbles = statusBubbleMode(section.statusBubbles)
     const selected = typeof section.petId === 'string' ? this.registry.byId(section.petId) : undefined
     if (selected !== undefined) {
       this.ledger.setPetId(selected.id)
-      this.ledger.setRemarks(selected.remarks)
+      this.applyRemarks(selected)
     } else if (section.petId !== undefined) {
       // The stored selection names a pet the registry no longer has: keep the
       // current selection and repair the settings document.
@@ -925,12 +1097,21 @@ export class PetService extends Service {
     }
     // Read-only: the ledger settles on economic events only, never on a read,
     // so polling the state cannot trigger pet.json writes.
-    // An expired announcement simply stops appearing (the client's 2 s poll
-    // drops it); no timer owns its removal.
-    const announcement = this.announcement !== undefined && announcementFresh(this.announcement, Date.now())
-      ? this.announcement
-      : undefined
+    // One slot per publishing plugin (issue #1812); an expired entry simply
+    // stops appearing (the client's 2 s poll drops it), no timer owns removal.
+    const announcements = this.freshAnnouncements()
+    // The freshest entry keeps the pre-#1812 meaning of the singular field, so
+    // a browser half that predates the array still renders one bubble instead
+    // of none (a rolling upgrade must never blank a publisher's bubble).
+    const announcement = announcements.reduce<PetAnnouncement | undefined>(
+      (freshest, entry) => freshest === undefined || entry.at > freshest.at ? entry : freshest,
+      undefined,
+    )
     const skin = this.persistedSkin(entry)
+    // The hover panel's action row extensions (issue #6). Served on every poll
+    // so a plugin that mounts or disposes its registration shows up (or goes
+    // away) within one tick, without a separate endpoint.
+    const panelActions = this.panelActions.views()
     return {
       animation: snapshot.animation,
       ...(snapshot.bubble === undefined ? {} : { bubble: snapshot.bubble }),
@@ -939,6 +1120,9 @@ export class PetService extends Service {
       sessions,
       ...(decoration === undefined ? {} : { decoration }),
       ...(announcement === undefined ? {} : { announcement }),
+      ...(announcements.length === 0 ? {} : { announcements }),
+      statusBubbles: this.statusBubbles,
+      ...(panelActions.length === 0 ? {} : { panelActions }),
       affinity: this.ledger.affinityView(Date.now()),
       // The one place the two visibility answers are combined: the pet's own
       // hide/show intent AND the plugin master switch. Producing the effective
