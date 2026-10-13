@@ -80,6 +80,37 @@ contributor's original frame artwork is covered by the MIT License below; no
 official illustrations, logos, voice recordings or other licensed material from
 SHIFT UP is included.
 
+## Jyn-Loli pet (assets/jyn-loli/)
+
+The Jyn-Loli pet assets shipped with this repository (`assets/jyn-loli/`: pet.json,
+the `thumb/` frame sequences, the asset README and the preview GIFs) are contributed
+by stushansusu (涂山苏苏) under the MIT License below; the manifest declares
+`author: 11726` and `license: MIT` (fail-closed contract). `11726` and stushansusu
+are two signatures of the same author — every pet.json on this character line records
+`11726` (jyn, jyn-foxtail and doro as well), while this file and the README built-in
+pet table credit the GitHub account — the mapping the Doro section above already
+records.
+
+The character is 鲸鱼娘 (whale girl), the unofficial fan character line this
+repository already ships as `assets/jyn` and `assets/jyn-foxtail`. It is a fan
+interpretation of the DeepSeek whale mark: the DeepSeek name and the whale mark
+belong to DeepSeek. This is fan artwork — not official, not affiliated with or
+endorsed by DeepSeek — and it claims no rights to the character. The assets are for
+personal, non-commercial use only: do not sell them, do not use them commercially,
+and do not present them as official.
+
+The illustration every frame is generated from is an AI-generated, pre-cut
+1184 x 1920 RGBA PNG supplied by the author (visible content bounding box
+1043 x 1774): the author states DeepSeek as the generator. The package's frames were
+then produced from that illustration with MiniMax H3 (fl2va image-to-video) on the
+author's local ComfyUI, 73 frames at 24 fps per track, the same illustration fed as
+both the first and the last frame. Unlike the Jyn-Q source, that PNG carries no PNG
+text chunk at all — no XMP and no TC260 AIGC label — so the generator attribution
+here is the author's statement rather than file metadata. No third-party artwork,
+official illustration, logo, voice recording or licensed runtime is included; only
+the contributor's own contribution — the generated frame sequences, the manifest,
+the asset README and the previews — is covered by the MIT License below.
+
 ## MIT License (Copyright (c) 2026 stushansusu)
 
 MIT License
