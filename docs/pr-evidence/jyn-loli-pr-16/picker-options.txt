@@ -1,0 +1,19 @@
+pet selector in a DSH Web GUI shell (dsh web on http://127.0.0.1:3080), Settings > 宠物
+element: select#settings-pet-pet
+persisted selection at capture time: jyn-loli
+option jyn-loli present: true
+
+=undefined
+blue-throated-bee-eater=undefined
+doro=undefined
+jyn=undefined
+jyn-foxtail=undefined
+jyn-loli=undefined
+jyn-papercut=undefined
+jyn-q=undefined
+long-niang=undefined
+miku=undefined
+ouo-neko=undefined
+starry-doll=undefined
+whale-girl=undefined
+whale-girl-refined=undefined
