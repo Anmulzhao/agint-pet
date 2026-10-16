@@ -1,0 +1,15 @@
+The RUNNING desktop shell (http://127.0.0.1:19387) — read live while the screenshot was taken.
+GET /api/pet/pets  (this endpoint is not behind the browser-auth gate)
+
+blue-throated-bee-eater=蓝喉蜂虎
+ouo-neko=OUO Neko
+whale-girl=鲸鱼娘（原版）
+whale-girl-refined=鲸鱼娘（精致版）
+doro=doro
+jyn=女仆鲸鱼娘
+jyn-foxtail=鲸鱼娘·狗尾巴草
+jyn-loli=鲸鱼娘·萝莉
+jyn-q=鲸鱼娘·Q版
+
+option jyn-loli present: true
+GET /api/pet/state -> pet id: jyn-loli
