@@ -14,9 +14,11 @@
  * - Canvas bitmap buffer (default where createImageBitmap/fetch/2D context
  *   exist): frames are decoded once into an ImageBitmap on demand, with a
  *   bounded look-ahead window over the playing track, and drawn onto one
- *   <canvas> - steady-state playback issues zero DOM mutations and zero
- *   re-decodes (measured hotspot: swapping <img>.src per frame drove image
- *   decode + invalidation every tick).
+ *   <canvas>. Steady-state playback issues zero DOM mutations and re-decodes
+ *   only what the retention budget evicted: decoded frames are held under
+ *   MAX_RETAINED_BYTES, so a long-lived pet that plays every track of every
+ *   skin cannot pin every bitmap for the life of the page (measured hotspot:
+ *   swapping <img>.src per frame drove image decode + invalidation every tick).
  * - Classic <img> fallback (jsdom/tests or missing APIs): identical to the
  *   historical behavior - cache-warm Image elements plus guarded src swaps,
  *   so environments without modern decoding keep working unchanged.
@@ -77,6 +79,20 @@ export interface Frames2dRendererHandle extends PetRendererHandle {
 
 /** Stall watchdog period: a looping track stuck longer re-kicks its chain. */
 const WATCHDOG_MS = 1200
+
+/**
+ * Retention budget for decoded frame bitmaps, in bytes.
+ *
+ * The budget is expressed in bytes rather than in frames because a frame's
+ * decoded footprint is `width * height * 4` and published pets differ by more
+ * than an order of magnitude (a 512x683 frame is 1.33 MB, a 128x128 frame is
+ * 64 KB): a frame count would be either useless for small atlases or too tight
+ * for large ones. 128 MiB holds this repository's longest shipped track (78
+ * frames, 104 MB) in full, so a running loop still re-decodes nothing, while
+ * capping a pet that played every track of every skin at roughly a tenth of
+ * the ~1.7 GB the unbounded memo reached.
+ */
+const MAX_RETAINED_BYTES = 128 * 1024 * 1024
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -160,6 +176,32 @@ interface DecodedFrame {
   height: number
 }
 
+/**
+ * One memoized decode job. `frame` and `bytes` appear only once the job
+ * resolved with a frame — exactly the set the retention budget may release;
+ * pending and failed jobs carry neither. The owning map's insertion order is
+ * the LRU order (re-inserting an entry marks it most recently used).
+ */
+interface DecodeEntry {
+  job: Promise<DecodedFrame | undefined>
+  frame?: DecodedFrame
+  bytes?: number
+}
+
+/**
+ * Release one decoded frame. `close()` is browser-only and idempotent, so the
+ * call is guarded for exotic hosts and for frames that were already released;
+ * the `<img>` fallback has no close, where dropping the reference is the
+ * release.
+ */
+function releaseFrame(frame: DecodedFrame | undefined): void {
+  if (frame === undefined) return
+  try {
+    const maybeClose = (frame.source as { close?: () => void }).close
+    if (typeof maybeClose === 'function') maybeClose.call(frame.source)
+  } catch { /* already released */ }
+}
+
 export const frames2dRenderer: PetRenderer<PetFrames2dConfig> = {
   id: 'frames2d',
   apiVersion: PET_RENDERER_API_VERSION,
@@ -209,11 +251,18 @@ export const frames2dRenderer: PetRenderer<PetFrames2dConfig> = {
       ctx.container.appendChild(img)
     }
 
-    // Decode cache: one concurrent decode per URL, memoized forever (frames
-    // are tiny same-origin webp files; failures resolve undefined and keep
-    // the last painted frame instead of breaking playback).
-    const decoding = new Map<string, Promise<DecodedFrame | undefined>>()
-    const decodedAll: Promise<void>[] = []
+    // Decode cache: one concurrent decode per URL, retained under a decoded
+    // byte budget. The historical map memoized every decoded frame forever, so
+    // a pet that had played all of its tracks (every skin) kept every bitmap
+    // alive for the life of the page: a shipped three-skin pet measures 1276
+    // frames at 512x683 RGBA, about 1.7 GB, growing monotonically. Entries now
+    // carry their decoded footprint, sit in Map insertion order (delete + set
+    // is an LRU touch) and the least recently used ones outside the playing
+    // window are closed once MAX_RETAINED_BYTES is crossed. A failed decode
+    // still resolves undefined and leaves the memo, so a transient fetch error
+    // retries instead of sticking.
+    const decoding = new Map<string, DecodeEntry>()
+    let retainedBytes = 0
     // All frame fetches funnel through a small pool. Full-library warm passes
     // on large pets fire 1100+ requests at once, which trips the browser's
     // in-flight request limit (net::ERR_INSUFFICIENT_RESOURCES) and fails
@@ -263,25 +312,91 @@ export const frames2dRenderer: PetRenderer<PetFrames2dConfig> = {
         if (index > 0) frameQueue.unshift(frameQueue.splice(index, 1)[0]!)
       }
       const cached = decoding.get(url)
-      if (cached !== undefined) return cached
+      if (cached !== undefined) {
+        // LRU touch: a hit means playback just asked for this frame, so it must
+        // not be the next victim. Re-inserting the same entry only reorders.
+        decoding.delete(url)
+        decoding.set(url, cached)
+        return cached.job
+      }
       let release!: () => void
       const gate = new Promise<void>((resolve) => { release = resolve })
       const job: Promise<DecodedFrame | undefined> = gate.then(() => (disposed ? undefined : decodeFrame(url)))
+      const entry: DecodeEntry = { job }
       job.then(
-        (frame) => { if (frame === undefined) decoding.delete(url) },
+        (frame) => {
+          if (frame === undefined) {
+            decoding.delete(url)
+            return
+          }
+          // A decode that lands after dispose is closed here: nothing can close
+          // it later, and the map was already drained.
+          if (disposed) {
+            releaseFrame(frame)
+            decoding.delete(url)
+            return
+          }
+          entry.frame = frame
+          entry.bytes = frame.width * frame.height * 4
+          retainedBytes += entry.bytes
+          // Only a resolved frame is evictable, and its decoded size is known
+          // only now, so the budget is enforced here.
+          enforceRetentionBudget()
+        },
         () => decoding.delete(url),
       )
       void job.finally(() => {
         activeFrames -= 1
         pumpFrames()
       })
-      decoding.set(url, job)
-      decodedAll.push(job.then(() => undefined, () => undefined))
-      const entry = { url, release }
-      if (jump) frameQueue.unshift(entry)
-      else frameQueue.push(entry)
+      decoding.set(url, entry)
+      const queued = { url, release }
+      if (jump) frameQueue.unshift(queued)
+      else frameQueue.push(queued)
       pumpFrames()
       return job
+    }
+
+    /**
+     * Release decoded bitmaps until the retained footprint is back under
+     * MAX_RETAINED_BYTES. Two properties keep this from breaking playback:
+     *
+     * - The playing track's look-ahead window, plus the frame a draw is waiting
+     *   on, are never released. Releasing one would hand a closed bitmap to
+     *   `drawImage`, and re-decoding it would stall the next tick.
+     * - Frames of any other track go first. That is what keeps a running loop
+     *   warm under a budget smaller than two whole tracks: eviction reclaims the
+     *   track the pet left instead of eating the cycle it is playing.
+     *
+     * When the protected window alone exceeds the budget nothing is released —
+     * a pet whose frames are that large cannot be bounded further without
+     * breaking playback, and the overshoot is then exactly one window.
+     */
+    function enforceRetentionBudget(): void {
+      if (retainedBytes <= MAX_RETAINED_BYTES) return
+      const def = config.tracks[track]
+      const playing = new Set<string>(def === undefined ? [] : def.frames)
+      const protectedUrls = new Set<string>()
+      if (pinned !== undefined) protectedUrls.add(pinned)
+      if (def !== undefined) {
+        const end = Math.min(def.frames.length, frameIndex + 1 + PREFETCH_AHEAD)
+        for (let index = frameIndex; index < end; index += 1) {
+          const url = def.frames[index]
+          if (url !== undefined) protectedUrls.add(url)
+        }
+      }
+      // Pass 1 reclaims frames of tracks the pet is not playing; pass 2 is the
+      // backstop for a single track larger than the whole budget.
+      for (const foreignOnly of [true, false]) {
+        for (const [url, entry] of decoding) {
+          if (retainedBytes <= MAX_RETAINED_BYTES) return
+          if (entry.bytes === undefined || protectedUrls.has(url)) continue
+          if (foreignOnly && playing.has(url)) continue
+          releaseFrame(entry.frame)
+          retainedBytes -= entry.bytes
+          decoding.delete(url)
+        }
+      }
     }
 
     /**
@@ -318,6 +433,9 @@ export const frames2dRenderer: PetRenderer<PetFrames2dConfig> = {
     let baseIdle: string = config.phases.idle
     let drawToken = 0
     let lastDrawnUrl: string | undefined
+    // The frame a draw is currently awaiting. Eviction must not release it:
+    // the callback below holds the bitmap and would draw a closed one.
+    let pinned: string | undefined
 
     const trackForPhase = (phase: ActivityPhase): string => {
       const mapped = config.phases[phase]
@@ -330,7 +448,9 @@ export const frames2dRenderer: PetRenderer<PetFrames2dConfig> = {
     const paintCanvas = (url: string): void => {
       if (context2d === null || canvas === null) return
       const myToken = ++drawToken
+      pinned = url
       void loadFrame(url, true).then((frame) => {
+        if (pinned === url) pinned = undefined
         if (disposed || frame === undefined || myToken !== drawToken) return
         if (lastDrawnUrl === url) return
         lastDrawnUrl = url
@@ -342,7 +462,7 @@ export const frames2dRenderer: PetRenderer<PetFrames2dConfig> = {
           context2d.clearRect(0, 0, canvas.width, canvas.height)
         }
         context2d.drawImage(frame.source as CanvasImageSource, 0, 0)
-      }).catch(() => { /* keep last frame */ })
+      }).catch(() => { if (pinned === url) pinned = undefined /* keep last frame */ })
     }
 
     const show = (trackId: string, index: number): void => {
@@ -433,21 +553,14 @@ export const frames2dRenderer: PetRenderer<PetFrames2dConfig> = {
       unsubscribe()
       if (timer !== undefined) clearTimeout(timer)
       if (watchdog !== undefined) clearInterval(watchdog)
-      // Release decoded bitmaps after pending decodes settle; close() is
-      // browser-only, so guard it for exotic hosts. Queued-but-unstarted
-      // frames release immediately as no-ops so the settle barrier drains.
+      // Release every retained bitmap and drain the pool. Queued-but-unstarted
+      // frames resolve as no-ops (the gate skips decodeFrame once disposed), and
+      // a decode that lands after this loop is closed by the resolution guard
+      // above, so teardown leaves nothing pending and nothing retained.
       for (const queued of frameQueue.splice(0)) queued.release()
-      void Promise.allSettled(decodedAll).then(() => {
-        for (const job of decoding.values()) {
-          void job.then((frame) => {
-            try {
-              const maybeClose = (frame?.source as { close?: () => void } | undefined)?.close
-              if (typeof maybeClose === 'function' && frame !== undefined) maybeClose.call(frame.source)
-            } catch { /* already released */ }
-          }).catch(() => { /* never rejects anyway */ })
-        }
-        decoding.clear()
-      })
+      for (const entry of decoding.values()) releaseFrame(entry.frame)
+      decoding.clear()
+      retainedBytes = 0
       canvas?.remove()
       img?.remove()
     }

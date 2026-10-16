@@ -4,7 +4,7 @@
  * override, fallback settling, and the stall watchdog, all on fake timers.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { frames2dRenderer, type Frames2dRendererHandle, type PetFrames2dConfig } from './frames2d.ts'
+import { frames2dRenderer, type Frames2dRendererHandle, type Frames2dTrackConfig, type PetFrames2dConfig } from './frames2d.ts'
 import { createPhaseStream, type PhaseStream } from '../phase-stream.ts'
 import type { PetRendererContext } from '../../contracts/renderer.ts'
 import type { ActivityPhase } from '../../state.ts'
@@ -399,5 +399,107 @@ describe('frames2dRenderer canvas bitmap path', () => {
     const memoFetches = (fetch as ReturnType<typeof vi.fn>).mock.calls.length
     expect(memoFetches).toBeGreaterThan(0)
     handle.dispose()
+  })
+
+  /** Decoded frames still resident: created minus closed. */
+  const retained = (): number => bitmaps.filter(bmp => bmp.close.mock.calls.length === 0).length
+
+  const fetchCount = (): number => (fetch as ReturnType<typeof vi.fn>).mock.calls.length
+  const fetchedUrls = (): string[] =>
+    (fetch as ReturnType<typeof vi.fn>).mock.calls.map(call => String(call[0]))
+
+  /**
+   * Install a decode stub whose frames claim `side * side * 4` bytes each, so a
+   * retention budget measured in bytes is reachable without allocating it.
+   */
+  const stubFramesOf = (side: number): void => {
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => {
+      const bmp = { width: side, height: side, close: vi.fn() }
+      bitmaps.push(bmp)
+      return bmp
+    }))
+  }
+
+  it('serves a looping track from the cache without re-decoding it', async () => {
+    const { ctx } = canvasSetup()
+    const handle = frames2dRenderer.mount(ctx, frames2dRenderer.validateConfig(CONFIG)) as Frames2dRendererHandle
+    await flush()
+    // Mount decodes the idle frame plus its one-frame look-ahead window.
+    expect(fetchCount()).toBe(2)
+    // Two whole cycles of the two-frame track: every frame is already resident.
+    vi.advanceTimersByTime(400)
+    await flush()
+    expect(fetchCount()).toBe(2)
+    expect(retained()).toBe(2)
+    handle.dispose()
+  })
+
+  it('releases frames outside the playing window and re-decodes them on demand', async () => {
+    // 4096x4096 puts a decoded frame at 64 MB, so the 128 MiB budget holds two
+    // of them and a 20-frame track has to evict as the window advances.
+    stubFramesOf(4096)
+    const longTrack: PetFrames2dConfig = {
+      tracks: {
+        idle: {
+          frames: Array.from({ length: 20 }, (_, index) => `/pet/miku/idle/${index}.webp`),
+          durations: Array.from({ length: 20 }, () => 100),
+          loop: true,
+        },
+      },
+      phases: { idle: 'idle' },
+    }
+    const { ctx } = canvasSetup()
+    const handle = frames2dRenderer.mount(ctx, frames2dRenderer.validateConfig(longTrack)) as Frames2dRendererHandle
+    await flush(80)
+    vi.advanceTimersByTime(1500)
+    await flush(80)
+    // The run decoded the whole track, but only the playing look-ahead window
+    // of it stays resident; the rest was really closed, not just unmapped.
+    expect(bitmaps.length).toBeGreaterThanOrEqual(20)
+    const closedWhilePlaying = bitmaps.filter(bmp => bmp.close.mock.calls.length > 0).length
+    expect(closedWhilePlaying).toBeGreaterThanOrEqual(10)
+    expect(retained()).toBeLessThanOrEqual(13)
+    expect(retained()).toBeLessThan(bitmaps.length)
+    // Looping back onto a released frame re-decodes it instead of drawing a
+    // closed bitmap.
+    vi.advanceTimersByTime(600)
+    await flush(80)
+    expect(fetchedUrls().filter(url => url === '/pet/miku/idle/0.webp').length).toBeGreaterThanOrEqual(2)
+    handle.dispose()
+    await flush()
+    expect(retained()).toBe(0)
+    for (const bmp of bitmaps) expect(bmp.close).toHaveBeenCalled()
+  })
+
+  it('reclaims earlier tracks so a long multi-track run stops growing', async () => {
+    stubFramesOf(4096)
+    const tracks: Record<string, Frames2dTrackConfig> = {}
+    for (let index = 0; index < 6; index += 1) {
+      tracks['t' + index] = {
+        frames: Array.from({ length: 6 }, (_, frame) => `/pet/miku/t${index}/${frame}.webp`),
+        durations: Array.from({ length: 6 }, () => 100),
+        loop: true,
+      }
+    }
+    const multiTrack: PetFrames2dConfig = { tracks, phases: { idle: 't0' } }
+    const { ctx } = canvasSetup()
+    const handle = frames2dRenderer.mount(ctx, frames2dRenderer.validateConfig(multiTrack)) as Frames2dRendererHandle
+    await flush(60)
+    const residentAfterEachTrack: number[] = []
+    for (let index = 0; index < 6; index += 1) {
+      handle.setState('t' + index)
+      vi.advanceTimersByTime(600)
+      await flush(60)
+      residentAfterEachTrack.push(retained())
+    }
+    // Six tracks were decoded in full, and the resident set stays at the playing
+    // track plus its window: it does not grow with the number of tracks played.
+    expect(bitmaps.length).toBeGreaterThanOrEqual(30)
+    expect(Math.max(...residentAfterEachTrack)).toBeLessThanOrEqual(13)
+    expect(retained()).toBeLessThan(bitmaps.length)
+    handle.dispose()
+    await flush()
+    expect(retained()).toBe(0)
+    for (const bmp of bitmaps) expect(bmp.close).toHaveBeenCalled()
   })
 })
