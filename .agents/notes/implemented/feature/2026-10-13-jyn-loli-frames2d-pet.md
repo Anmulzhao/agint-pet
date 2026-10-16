@@ -73,3 +73,61 @@ and a maintainer may reasonably revisit both.
 - The source illustration carries no PNG text chunk, so
   `THIRD_PARTY_NOTICES.md` records the generator as the author's statement rather
   than as file metadata — unlike the Jyn-Q entry, which could cite a TC260 label.
+
+
+## Review round: the two frames the reviewer could see (2026-10-16)
+
+The intake review passed the material checks (manifest, 720-frame contract,
+provenance, the built-in pet table, CI) and requested changes on three things a
+human eye catches and a validator cannot. Two of them were **animation defects in
+the shipped frames**, not documentation, and both traced back to a decision made
+earlier in the build rather than to the model's own art.
+
+1. **The preview GIFs were not transparent.** `previews/*.gif` went through
+   petkit's `_write_gif`, which pre-composites every frame onto an 8px grey
+   checkerboard before quantising to a 255-colour palette — so all 7200 preview
+   pixels came out with alpha 255 and the top-left read (239,237,240). Every other
+   pet's previews in this repository are true-alpha GIFs (doro's `cola.gif`,
+   whale-refined's `idle.gif`: alpha range [0,255], corner alpha 0), so the
+   package was the odd one out. petkit is shared by three pets and is not this
+   PR's to change; the replacement writer (`tools/make_preview_gifs.py`) reserves
+   one palette index for transparency, binarises the frame's own alpha at 128 and
+   saves with `disposal=2`, and uses FASTOCTREE rather than MEDIANCUT so the
+   transparent GIFs come out at the size of the checkerboard ones (idle 1503KB vs
+   1404KB) instead of 60% larger. Composited on white, a rebuilt frame now differs
+   from the committed frame by a mean of 2.4/255 — the checkerboard build differed
+   by 17, which is what made the "these GIFs are rendered from the committed
+   frames" claim unverifiable.
+
+2. **the rest entry track carried an opaque grey ghost over f_007..f_032.**
+   Root cause, found by rebuilding the track from its source: `derive_resting_v2.py`
+   resampled the source's f0..f44 onto 72 frames with **linear interpolation**, and
+   the lie-down (f4..f20) moves 18->55 grey levels per frame inside the character
+   silhouette. On a pure white backdrop a 34%/66% blend of two such frames does not
+   produce a 34% ghost — it dilutes the hair into grey, which is exactly the
+   "looks semi-transparent but the alpha is opaque" the review described. A blend
+   is only safe where the source itself barely moves, so the rebuild
+   (`derive_rest_v3.py`) uses a **motion-adaptive time remap**: f0..f20 at 1:1
+   (frame-for-frame, zero blending), a smoothstep ramp to 2.32x over f20.5..f26.5,
+   and 2.32x slow motion for the quiet lying segment that follows. Ghost amplitude
+   (min(frac,1-frac) x inter-frame motion) falls from 24.8 grey levels at frame 25
+   to 2.5 in the whole flagged range, and the track keeps the same first and last
+   frames, so the rest->resting seam stays exact.
+
+3. **work-fail's rainbow was six hard-edged flat sectors, and it buried the
+   sweater.** That one is the model's own art: seven flat pure colours
+   (rgb(208,0,16) / (232,144,16) / (248,248,88) / (88,240,40) / (24,248,248) /
+   (0,16,224) / (144,0,208)) covering 87k px at its peak, 71% of them sharing a
+   colour with all eight neighbours. It is repaired rather than regenerated
+   (ComfyUI is not running, and a re-roll is a different animation): every occluded
+   pixel is filled from the nearest frame in which the fan does not cover it
+   (100% of the fan's union is recoverable inside f0..f44; median donor distance 5
+   frames), and the fan itself is re-rendered as a **feathered, translucent
+   overlay** whose colours are the same sectors smoothed by a normalised
+   convolution inside the mask. Hard-edge fraction falls to 0.000 and the buried
+   sweater detail comes back at 55%.
+
+Alternative considered and rejected: **rolling back to the other work-fail take**
+(`work-fail_771623.mp4`, kept in the generation-side logs). Its "fan" mask
+matches saturated pixels across the whole 768x1248 canvas and never clears — it is
+the rejected take, not a cleaner one.

@@ -99,6 +99,10 @@ endorsed by DeepSeek — and it claims no rights to the character. The assets ar
 personal, non-commercial use only: do not sell them, do not use them commercially,
 and do not present them as official.
 
+Review that position before redistributing or using these assets, and obtain the
+appropriate rights from DeepSeek where the conditions above are not met — the same
+terms the Miku section above states for the character it covers.
+
 The illustration every frame is generated from is an AI-generated, pre-cut
 1184 x 1920 RGBA PNG supplied by the author (visible content bounding box
 1043 x 1774): the author states DeepSeek as the generator. The package's frames were

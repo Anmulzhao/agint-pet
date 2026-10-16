@@ -338,3 +338,165 @@ describe('jyn-loli pet manifest', () => {
     expect(box.y1).toBeLessThanOrEqual(1)
   })
 })
+/**
+ * Minimal GIF89a reader — block walk plus an LZW decoder. The previews are the
+ * one group of assets in this package that a header-only reader cannot check:
+ * the question they exist to answer is "is this GIF really transparent, or is a
+ * checkerboard baked into opaque pixels?", and a checkerboard GIF and a
+ * transparent GIF have identical headers, frame counts and cadences. Only the
+ * decoded index raster distinguishes them. No dependency is added for it: the
+ * decoder below reads the same raster the browser will.
+ */
+interface GifFrame {
+  /** Index raster as decoded, one byte per pixel, row-major. */
+  indices: Uint8Array
+  /** The colour index this frame declares transparent, or -1. */
+  transparentIndex: number
+  /** Frame delay in milliseconds (GIF stores hundredths of a second). */
+  delayMs: number
+}
+
+function lzwDecode(minCodeSize: number, data: Buffer, pixelCount: number): Uint8Array {
+  const clearCode = 1 << minCodeSize
+  const eoiCode = clearCode + 1
+  const out: number[] = []
+  let prefix: number[] = []
+  let dict: number[][] = []
+  let codeSize = minCodeSize + 1
+  let bit = 0
+  const reset = (): void => {
+    dict = []
+    for (let i = 0; i < clearCode; i++) dict.push([i])
+    dict.push([], [])
+    codeSize = minCodeSize + 1
+  }
+  reset()
+  while (out.length < pixelCount) {
+    let code = 0
+    for (let i = 0; i < codeSize; i++) {
+      const byte = data[bit >> 3]
+      if (byte === undefined) return Uint8Array.from(out)
+      code |= ((byte >> (bit & 7)) & 1) << i
+      bit++
+    }
+    if (code === clearCode) { reset(); prefix = []; continue }
+    if (code === eoiCode) break
+    let entry: number[]
+    if (code < dict.length && dict[code]!.length) entry = dict[code]!
+    else if (prefix.length) entry = [...prefix, prefix[0]!]
+    else break
+    out.push(...entry)
+    if (prefix.length) dict.push([...prefix, entry[0]!])
+    prefix = entry
+    if (dict.length === (1 << codeSize) && codeSize < 12) codeSize++
+  }
+  return Uint8Array.from(out.slice(0, pixelCount))
+}
+
+function readGif(buf: Buffer): { width: number; height: number; frames: GifFrame[] } {
+  if (buf.toString('ascii', 0, 6) !== 'GIF89a') throw new Error('not a GIF89a')
+  const width = buf.readUInt16LE(6)
+  const height = buf.readUInt16LE(8)
+  const screenPacked = buf[10]!
+  let p = 13
+  if (screenPacked & 0x80) p += 3 * (1 << ((screenPacked & 0x07) + 1))
+  const frames: GifFrame[] = []
+  let transparentIndex = -1
+  let delayMs = 0
+  while (p < buf.length) {
+    const marker = buf[p]!
+    if (marker === 0x3b) break
+    if (marker === 0x21) {
+      const label = buf[p + 1]!
+      p += 2
+      if (label === 0xf9) {
+        const size = buf[p]!
+        const packed = buf[p + 1]!
+        delayMs = buf.readUInt16LE(p + 2) * 10
+        transparentIndex = (packed & 0x01) ? buf[p + 4]! : -1
+        p += size + 1
+      }
+      while (buf[p] !== 0) p += buf[p]! + 1 // extension sub-blocks end with 0
+      p += 1
+      continue
+    }
+    if (marker !== 0x2c) throw new Error('unexpected GIF block 0x' + marker.toString(16))
+    const left = buf.readUInt16LE(p + 1)
+    const top = buf.readUInt16LE(p + 3)
+    const fw = buf.readUInt16LE(p + 5)
+    const fh = buf.readUInt16LE(p + 7)
+    const packed = buf[p + 9]!
+    p += 10
+    if (packed & 0x80) p += 3 * (1 << ((packed & 0x07) + 1))
+    const minCodeSize = buf[p]!
+    p += 1
+    const chunks: Buffer[] = []
+    while (buf[p] !== 0) {
+      const n = buf[p]!
+      chunks.push(buf.subarray(p + 1, p + 1 + n))
+      p += n + 1
+    }
+    p += 1
+    const indices = lzwDecode(minCodeSize, Buffer.concat(chunks), fw * fh)
+    // Re-place the frame inside the logical screen so callers see one grid.
+    const grid = new Uint8Array(width * height).fill(0xff)
+    for (let y = 0; y < fh; y++) {
+      for (let x = 0; x < fw; x++) {
+        const src = y * fw + x
+        if (src < indices.length) grid[(top + y) * width + left + x] = indices[src]!
+      }
+    }
+    frames.push({ indices: grid, transparentIndex, delayMs })
+  }
+  return { width, height, frames }
+}
+
+describe('jyn-loli preview GIFs', () => {
+  const previewDir = join(JYN_LOLI_DIR, 'previews')
+  const previewFiles = readdirSync(previewDir).filter(f => f.endsWith('.gif')).sort()
+
+  it('ships one preview per track and nothing else', () => {
+    // Given the committed preview directory; when it is listed; then it holds
+    // exactly the ten track GIFs, named after their tracks.
+    expect(previewFiles).toEqual(Object.keys(TRACK_FRAMES).map(t => t + '.gif').sort())
+  })
+
+  it('renders every preview from the committed frames at the same cadence', () => {
+    // Given a preview GIF; when its screen size, frame count and delays are read;
+    // then it is the shipped frame sequence scaled to the preview long side and
+    // running on the frame's own 40ms — the review-time animation and the runtime
+    // animation are the same pixels on the same clock.
+    const cell = imageDimensions(readFileSync(join(JYN_LOLI_DIR, 'thumb', 'idle', 'f_000_40.webp')))!
+    const longSide = Math.max(cell.width, cell.height)
+    for (const file of previewFiles) {
+      const track = file.replace(/\.gif$/, '')
+      const gif = readGif(readFileSync(join(previewDir, file)))
+      expect(gif.frames.length, file).toBe(TRACK_FRAMES[track])
+      expect(Math.max(gif.width, gif.height), file).toBe(320)
+      expect(gif.width, file).toBe(Math.round(cell.width * 320 / longSide))
+      expect(gif.height, file).toBe(Math.round(cell.height * 320 / longSide))
+      for (const frame of gif.frames) expect(frame.delayMs, file).toBe(FRAME_MS)
+    }
+  })
+
+  it('keeps every preview background transparent instead of baking a checkerboard', () => {
+    // Given a preview GIF; when its frames are decoded; then every frame declares
+    // a transparent index, the canvas corner is that index (the character never
+    // reaches it), and most of the canvas is transparent. An earlier build fed
+    // each frame through petkit's checkerboard pre-composite before quantising,
+    // so every pixel came out opaque and the corner read (239,237,240) against
+    // (213,213,221) — a preview that showed a background the sprite never has.
+    // A checkerboard GIF and a transparent GIF differ in nothing else, which is
+    // why this guard decodes rather than sniffs headers.
+    for (const file of previewFiles) {
+      const gif = readGif(readFileSync(join(previewDir, file)))
+      for (const frame of gif.frames) {
+        expect(frame.transparentIndex, file).toBeGreaterThanOrEqual(0)
+        expect(frame.indices[0], file + ' top-left pixel').toBe(frame.transparentIndex)
+        let transparent = 0
+        for (const index of frame.indices) if (index === frame.transparentIndex) transparent++
+        expect(transparent / frame.indices.length, file).toBeGreaterThan(0.2)
+      }
+    }
+  })
+})
