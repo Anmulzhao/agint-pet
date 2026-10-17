@@ -162,3 +162,27 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## deep-chan pet (assets/deep-chan/)
+
+The deep-chan pet assets in this directory (`assets/deep-chan/`: `pet.json`, the
+spritesheet, and the preview GIFs) are contributed by **Daizhdd**. The manifest
+declares `author: Daizhdd` and `license: Personal-Use-Only`.
+
+deep酱 (deep-chan) is an unofficial, fan-made derivative of the DeepSeek whale
+girl (鲸鱼娘). The character design, name, likeness and all related rights belong
+to the original author(s) and to DeepSeek. This is fan artwork: it is not official
+and is not affiliated with or endorsed by DeepSeek, and it claims no rights to the
+character. The assets are for personal, non-commercial use only — do not sell them
+or use them commercially, and do not present them as official.
+
+Artwork provenance: the character was designed by the contributor with AI
+assistance. The frames were then cut, given secondary motion (breathing, sway,
+bob), and packed into the sprite2d atlas by a script; every frame in
+`spritesheet.webp` is derived from the contributor's own artwork. No official
+illustrations, logos, voice recordings or any other licensed material is included,
+and no third-party artwork was used as a source.
+
+These assets are **not** covered by the MIT License of this repository, nor by any
+license text above: the manifest's `license` field (`Personal-Use-Only`) governs
+them.
