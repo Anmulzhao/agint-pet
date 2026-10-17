@@ -63,7 +63,10 @@
     0 4px 12px rgba(2, 6, 23, 0.35),
     inset 0 1px 0 rgba(226, 232, 255, 0.1),
     0 0 12px rgba(77, 107, 254, 0.18);
-  backdrop-filter: blur(8px);
+  /* No backdrop-filter (issue #17): the glass is 90-94% opaque, so the blur was
+     invisible while forcing this permanently-mounted layer to re-composite the
+     page behind it on every sprite frame change; a blurred fixed layer costs
+     CPU on software-compositing and power-saving paths. */
   letter-spacing: 0.02em;
   animation: pet-bubble-in 240ms ease-out;
 }
@@ -242,7 +245,8 @@
     0 8px 24px rgba(2, 6, 23, 0.45),
     0 0 0 1px rgba(77, 107, 254, 0.1),
     inset 0 1px 0 rgba(226, 232, 255, 0.08);
-  backdrop-filter: blur(10px);
+  /* No backdrop-filter (issue #17): at 95-97% opacity the blur never showed,
+     and the panel overlaid the sprite's own animation while it was open. */
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -657,7 +661,9 @@
     0 4px 12px rgba(2, 6, 23, 0.35),
     inset 0 1px 0 rgba(226, 232, 255, 0.1),
     0 0 12px rgba(77, 107, 254, 0.18);
-  backdrop-filter: blur(8px);
+  /* No backdrop-filter (issue #17), same reason as .bubbleStatus: a 92-95%
+     opaque pill gains nothing visible from the blur but pays for the filter on
+     every frame the pet animates. */
   letter-spacing: 0.02em;
   animation: pet-usage-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
