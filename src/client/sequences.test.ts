@@ -36,7 +36,7 @@ describe('createSequenceTimeline', () => {
   const sequence: PetAnimation[] = ['running', 'waiting']
 
   it('resolves identically to the per-call helper at animation-sample elapsed values', () => {
-    // The sprite frame loop asks once per rAF tick with accumulated
+    // The sprite frame loop asks once per frame tick with accumulated
     // millisecond offsets; the precomputed table must agree everywhere.
     const timeline = createSequenceTimeline(sequence, tracks)
     for (let elapsed = 0; elapsed <= 1_500; elapsed += 7) {
@@ -49,5 +49,41 @@ describe('createSequenceTimeline', () => {
     expect(timeline.frameAt(350)).toEqual(timeline.frameAt(350))
     expect(timeline.frameAt(0)).toEqual({ animation: 'running', frameIndex: 0 })
     expect(timeline.frameAt(1_420)).toEqual({ animation: 'running', frameIndex: 0 })
+  })
+})
+
+describe('SequenceTimeline.remainingAt (issue #17)', () => {
+  const sequence: PetAnimation[] = ['running', 'waiting']
+
+  it('reports the time left in the frame the query lands on', () => {
+    const timeline = createSequenceTimeline(sequence, tracks)
+    // running frames are 100ms then 200ms, waiting 300ms then 100ms.
+    expect(timeline.remainingAt(0)).toBe(100)
+    expect(timeline.remainingAt(40)).toBe(60)
+    expect(timeline.remainingAt(100)).toBe(200)
+    expect(timeline.remainingAt(299)).toBe(1)
+    // The second item's first frame, measured from the item boundary.
+    expect(timeline.remainingAt(300)).toBe(300)
+    expect(timeline.remainingAt(600)).toBe(100)
+  })
+
+  it('accounts for a loop wrap without overshooting', () => {
+    const timeline = createSequenceTimeline(sequence, tracks)
+    // 700ms is one full sequence: the wrap lands on running frame 0 again.
+    expect(timeline.frameAt(700)).toEqual({ animation: 'running', frameIndex: 0 })
+    expect(timeline.remainingAt(700)).toBe(100)
+    expect(timeline.remainingAt(750)).toBe(50)
+  })
+
+  it('steps over a zero-length frame instead of reporting a zero delay', () => {
+    const zeroTracks = {
+      running: track([0, 200]),
+      waiting: track([100]),
+    } as Record<PetAnimation, PetTrackDef>
+    const timeline = createSequenceTimeline(sequence, zeroTracks)
+    // The loop schedules its next wake from this value, so a zero-duration
+    // frame must resolve to the next real frame rather than to a 0ms timer.
+    expect(timeline.remainingAt(0)).toBe(200)
+    expect(timeline.remainingAt(200)).toBe(100)
   })
 })

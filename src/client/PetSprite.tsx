@@ -22,7 +22,7 @@ import type { GameplayBus } from './gameplay-hud.ts'
 import type { PetRoamDirection } from '../gameplay.ts'
 import type { DecorationView } from '../contracts/status-decoration.ts'
 import type { PetFeedback } from './pet-store.ts'
-import { framePosition, rowOfTrack, trimTrack } from './spritesheet.ts'
+import { framePosition, rowOfTrack, scaledCellSize, trimTrack } from './spritesheet.ts'
 import { createSequenceTimeline } from './sequences.ts'
 import { animationForPhase, type ActivityPhase, type PetAnimation } from '../state.ts'
 import { NS } from './locales.ts'
@@ -250,10 +250,12 @@ function UsageAnnouncementBubble(props: { announcement: PetAnnouncement }): Reac
 }
 
 /**
- * The floating pet. The spritesheet frame advances on requestAnimationFrame
- * with per-frame durations from the definition's tracks; the atlas image is
- * loaded once and the background position is written straight to the sprite
- * element (no per-frame React state).
+ * The floating pet. The spritesheet frame advances on a timer scheduled for the
+ * current frame's remaining time (per-frame durations come from the
+ * definition's tracks), so the loop wakes once per frame change instead of once
+ * per screen refresh; the atlas image is loaded once and the background
+ * position is written straight to the sprite element (no per-frame React
+ * state). Roaming writes the sprite's position the same way (issue #17).
  */
 export function PetSprite(props: PetSpriteProps): ReactPortal {
   const { snapshot, definition, display, feedback } = props
@@ -376,6 +378,10 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
   const animation = snapshot?.animation ?? 'idle'
   const scaleRef = useRef(spriteScale)
   scaleRef.current = spriteScale
+  // The frame the loop painted last. A settled non-looping track leaves the
+  // loop stopped, so a later scale change repaints it from here instead of
+  // waking the loop.
+  const paintedRef = useRef<{ row: number; col: number } | null>(null)
   useEffect(() => {
     if (props.visual !== undefined) return
     const reduceMotion = typeof window !== 'undefined'
@@ -398,35 +404,46 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
     const leadAnimation = sequence?.[0] ?? animation
     const row = rowOfTrack(leadAnimation)
     const track = trimTrack(tracks[leadAnimation], rows[row] ?? tracks[leadAnimation].frames.length)
+    // Write one frame's offset to the sprite element, skipping the assignment
+    // when the coordinates did not change. lastPosStr is the cache the whole
+    // loop shares, so a tick that changes nothing costs no style write.
+    let lastPosStr = ''
+    const paint = (frameRow: number, col: number): void => {
+      paintedRef.current = { row: frameRow, col }
+      const pos = framePosition(cell, frameRow, col, scaleRef.current)
+      const posStr = pos.x + 'px ' + pos.y + 'px'
+      if (posStr === lastPosStr) return
+      lastPosStr = posStr
+      if (spriteRef.current !== null) {
+        spriteRef.current.style.backgroundPosition = posStr
+      }
+    }
     // Paint one static sprite frame up front either way, so the pet is never
     // blank while the loop heat-up runs.
-    const leadCol = track.frames[0]!
-    const lead = framePosition(cell, row, leadCol, scaleRef.current)
-    let lastPosStr = lead.x + 'px ' + lead.y + 'px'
-    if (spriteRef.current !== null) {
-      spriteRef.current.style.backgroundPosition = lastPosStr
-    }
+    paint(row, track.frames[0]!)
     if (reduceMotion) return
-    let raf = 0
+    let timer = 0
     let last = performance.now()
     let sequenceElapsed = 0
-    const tick = (ts: number): void => {
-      const delta = ts - last
-      last = ts
+    // Sleep to the next frame boundary instead of waking on every screen
+    // refresh: track durations are 300-700 ms, so a 60 Hz loop spent the vast
+    // majority of its ticks proving that nothing had changed -- the same rule
+    // StatusOrnament already follows. A late wake (throttled tab, jank) still
+    // catches up every due frame, so the track keeps its own clock.
+    const schedule = (delay: number): void => {
+      timer = window.setTimeout(tick, Math.max(1, delay))
+    }
+    const tick = (): void => {
+      timer = 0
+      const now = performance.now()
+      const delta = now - last
+      last = now
       if (timeline !== undefined && sequenceItems !== undefined) {
         sequenceElapsed += delta
         const current = timeline.frameAt(sequenceElapsed)
         const item = sequenceItems.get(current.animation)!
-        const col = item.track.frames[current.frameIndex]!
-        const pos = framePosition(cell, item.row, col, scaleRef.current)
-        const posStr = pos.x + 'px ' + pos.y + 'px'
-        if (posStr !== lastPosStr) {
-          lastPosStr = posStr
-          if (spriteRef.current !== null) {
-            spriteRef.current.style.backgroundPosition = posStr
-          }
-        }
-        raf = requestAnimationFrame(tick)
+        paint(item.row, item.track.frames[current.frameIndex]!)
+        schedule(timeline.remainingAt(sequenceElapsed))
         return
       }
       // row/track come from the effect scope: they were computed once above
@@ -445,27 +462,32 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
         st.index += 1
       }
       if (st.elapsed >= (track.durations[st.index] ?? 0)) {
-        if (track.loop) {
-          st.elapsed = 0
-          st.index = 0
-        } else {
-          st.index = maxIndex // hold the final frame; the host switches tracks
+        if (!track.loop) {
+          // Hold the final frame; the host owns the switch to the fallback, so
+          // stop scheduling instead of re-painting the same frame forever.
+          st.index = maxIndex
+          paint(row, track.frames[st.index]!)
+          return
         }
+        st.elapsed = 0
+        st.index = 0
       }
-      const col = track.frames[st.index]!
-      const pos = framePosition(cell, row, col, scaleRef.current)
-      const posStr = pos.x + 'px ' + pos.y + 'px'
-      if (posStr !== lastPosStr) {
-        lastPosStr = posStr
-        if (spriteRef.current !== null) {
-          spriteRef.current.style.backgroundPosition = posStr
-        }
-      }
-      raf = requestAnimationFrame(tick)
+      paint(row, track.frames[st.index]!)
+      schedule((track.durations[st.index] ?? 0) - st.elapsed)
     }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
+    schedule(0)
+    return () => window.clearTimeout(timer)
   }, [animation, phase, cell, columns, rows, tracks, sequences, props.visual])
+
+  // A stopped loop is woken by nothing, so a sprite scale change repaints the
+  // frame it settled on: without this a resized pet would keep the old scale's
+  // cell offsets and show a neighbouring cell until the track changed.
+  useLayoutEffect(() => {
+    const painted = paintedRef.current
+    if (props.visual !== undefined || painted === null || spriteRef.current === null) return
+    const pos = framePosition(cell, painted.row, painted.col, spriteScale)
+    spriteRef.current.style.backgroundPosition = pos.x + 'px ' + pos.y + 'px'
+  }, [spriteScale, cell, props.visual])
 
   // Auto-clear the feedback bubble after its CSS animation. The callback
   // rides a ref so re-renders never reset the timer: the 2s poll rebuilds
@@ -496,10 +518,13 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>): void => {
     if (props.dragDisabled === true) return
+    // Read the live position before ending a walk: the walk keeps it in a ref
+    // rather than React state, so a drag grabbed mid-walk starts where the pet
+    // actually is instead of snapping back to where the walk began.
+    const current = walkTargetRef.current ?? dragPosRef.current ?? { right: display.right, bottom: display.bottom }
     endWalk(false)
     e.preventDefault()
     ;(e.target as HTMLElement).setPointerCapture?.(e.pointerId)
-    const current = dragPos ?? { right: display.right, bottom: display.bottom }
     dragRef.current = { startX: e.clientX, startY: e.clientY, ...current }
     draggedRef.current = false
     setHovered(false)
@@ -524,10 +549,6 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
     if (dragPos !== null) props.onDragEnd(dragPos.right, dragPos.bottom)
   }
 
-  const pos = dragPos ?? { right: display.right, bottom: display.bottom }
-  const spriteWidth = Math.round(cell.width * spriteScale)
-  const spriteHeight = Math.round(cell.height * spriteScale)
-
   // --- roaming ---------------------------------------------------------
   // The gameplay HUD rolls when the pet may wander; this side owns the motion
   // (clamped to the viewport), the walk art's facing and the persisted resting
@@ -536,9 +557,23 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
   // the side view); every other track stays unmirrored.
   const [facingRight, setFacingRight] = useState(false)
   const walkRafRef = useRef(0)
+  // Live position while a walk is in flight. The walk writes the element's
+  // right/bottom directly and mirrors them here instead of calling setState:
+  // a walk is 1-3 s of 60 fps motion, and each frame used to re-render the
+  // whole sprite tree (bubble stack, dock panel) for a position the DOM already
+  // knew. Keeping it in a ref means a render that lands mid-walk (a poll, a
+  // hover) still sees where the sprite actually is (issue #17).
   const walkTargetRef = useRef<{ right: number; bottom: number } | null>(null)
   const dragPosRef = useRef(dragPos)
   dragPosRef.current = dragPos
+
+  const pos = walkTargetRef.current ?? dragPos ?? { right: display.right, bottom: display.bottom }
+  // One integral cell size for the sprite box, the atlas grid and every frame
+  // offset: background-size is this size times the column/row count, so the
+  // scaled atlas shares a pixel grid with the box that shows one cell (#17).
+  const scaled = scaledCellSize(cell, spriteScale)
+  const spriteWidth = scaled.width
+  const spriteHeight = scaled.height
 
   /** Stop an active walk; `persist` lands the pet on the spot it reached. */
   const endWalk = (persist: boolean): void => {
@@ -548,7 +583,12 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
     setFacingRight(false)
     const settled = walkTargetRef.current
     walkTargetRef.current = null
-    if (persist && settled !== null) props.onDragEnd(settled.right, settled.bottom)
+    if (settled === null) return
+    // Hand the reached spot back to React state: the walk's own frames never
+    // updated it, and a render (or a drag that starts here) would otherwise
+    // put the sprite back where the walk began.
+    setDragPos(settled)
+    if (persist) props.onDragEnd(settled.right, settled.bottom)
   }
 
   useEffect(() => {
@@ -589,7 +629,15 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
           bottom: current.bottom + (target.bottom - current.bottom) * t,
         }
         walkTargetRef.current = next
-        setDragPos(next)
+        // The position goes straight to the element: a walk is the one motion
+        // that moved every frame, and a setState here re-rendered the bubble
+        // stack and the dock panel for a value the DOM already knew (issue
+        // #17). React state takes over once, on the landing frame.
+        const el = floatRef.current
+        if (el !== null) {
+          el.style.right = next.right + 'px'
+          el.style.bottom = next.bottom + 'px'
+        }
         if (t < 1) {
           walkRafRef.current = window.requestAnimationFrame(step)
           return
@@ -597,6 +645,7 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
         walkRafRef.current = 0
         walkTargetRef.current = null
         setFacingRight(false)
+        setDragPos(next)
         props.onDragEnd(next.right, next.bottom)
       }
       walkRafRef.current = window.requestAnimationFrame(step)
@@ -736,7 +785,7 @@ export function PetSprite(props: PetSpriteProps): ReactPortal {
             ...(props.visual === undefined
               ? {
                   backgroundImage: imageReady ? 'url(' + definition.atlasUrl + ')' : undefined,
-                  backgroundSize: (cell.width * columns * spriteScale) + 'px ' + (cell.height * (definition.atlasRows ?? rows.length) * spriteScale) + 'px',
+                  backgroundSize: (scaled.width * columns) + 'px ' + (scaled.height * (definition.atlasRows ?? rows.length)) + 'px',
                   backgroundRepeat: 'no-repeat',
                   backgroundPosition: '0 0',
                 }

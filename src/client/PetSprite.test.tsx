@@ -11,7 +11,8 @@ import { t } from './locales.ts'
 import type { PetStateView } from '../service.ts'
 import type { PetAnnouncement } from '../announce.ts'
 import type { PetDefinition, PetTrackDef } from '../registry.ts'
-import type { PetAnimation } from '../state.ts'
+import type { GameplayBus } from './gameplay-hud.ts'
+import { rowOf, type PetAnimation } from '../state.ts'
 import type { DecorationView } from '../contracts/status-decoration.ts'
 
 /** A minimal pet definition (geometry + tracks) as served by the host. */
@@ -71,8 +72,8 @@ const snapshot: PetStateView = {
 beforeAll(() => {
   // Deterministic zh copy for button labels.
   document.documentElement.lang = 'zh'
-  // Prefer-reduced-motion matches: the sprite loop then never schedules
-  // requestAnimationFrame, keeping the test free of animation timers.
+  // Prefer-reduced-motion matches: the sprite loop then never schedules a
+  // frame timer, keeping the test free of animation timers.
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
     value: (query: string) => ({
@@ -587,13 +588,15 @@ describe('PetSprite definition-driven render', () => {
       removeListener: () => {},
       dispatchEvent: () => false,
     })
-    vi.spyOn(performance, 'now').mockReturnValue(0)
-    let nextFrame: FrameRequestCallback | undefined
-    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
-      nextFrame = callback
-      return 1
-    })
-    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const timers: { at: number; callback: () => void }[] = []
+    let timerId = 0
+    vi.spyOn(window, 'setTimeout').mockImplementation(((callback: () => void, delay = 0) => {
+      timers.push({ at: now + delay, callback })
+      return ++timerId
+    }) as typeof window.setTimeout)
+    vi.spyOn(window, 'clearTimeout').mockImplementation(() => {})
     const definition = petDefinition()
     definition.sequences = {
       thinking: ['running', 'waiting', 'running', 'waiting', 'running'],
@@ -604,7 +607,11 @@ describe('PetSprite definition-driven render', () => {
     })
     const sprite = screen.getByRole('button', { name: '鲸鱼娘' })
     expect(sprite.style.backgroundPosition).toBe('0px -1120px')
-    act(() => { nextFrame?.(1_500) })
+    // The loop sleeps for the frame's remaining time; jump the clock past the
+    // first item of the sequence (running frames are 250ms each) and fire the
+    // one pending tick.
+    now = 1_500
+    act(() => { for (const timer of timers.splice(0)) timer.callback() })
     expect(sprite.style.backgroundPosition).toBe('0px -960px')
   })
 
@@ -619,23 +626,30 @@ describe('PetSprite definition-driven render', () => {
       removeListener: () => {},
       dispatchEvent: () => false,
     })
-    vi.spyOn(performance, 'now').mockReturnValue(0)
-    let nextFrame: FrameRequestCallback | undefined
-    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
-      nextFrame = callback
-      return 1
-    })
-    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const timers: { at: number; callback: () => void }[] = []
+    let timerId = 0
+    vi.spyOn(window, 'setTimeout').mockImplementation(((callback: () => void, delay = 0) => {
+      timers.push({ at: now + delay, callback })
+      return ++timerId
+    }) as typeof window.setTimeout)
+    vi.spyOn(window, 'clearTimeout').mockImplementation(() => {})
     renderPet({
       snapshot: { ...snapshot, animation: 'idle', phase: 'idle' },
     })
     const sprite = screen.getByRole('button', { name: '鲸鱼娘' })
     const styleSetterSpy = vi.spyOn(sprite.style, 'backgroundPosition', 'set')
-    // Idle frame 0 duration is 400ms. An intermediate tick at 16ms does not advance the frame.
-    act(() => { nextFrame?.(16) })
+    // Idle frame 0 duration is 400ms. An intermediate tick at 16ms does not
+    // advance the frame, writes nothing, and the loop sleeps to the boundary
+    // (t=400) rather than polling every screen refresh.
+    now = 16
+    act(() => { for (const timer of timers.splice(0)) timer.callback() })
     expect(styleSetterSpy).not.toHaveBeenCalled()
+    expect(timers[0]?.at).toBe(400)
     // A tick past 400ms advances to frame 1 and should set backgroundPosition once.
-    act(() => { nextFrame?.(410) })
+    now = 410
+    act(() => { for (const timer of timers.splice(0)) timer.callback() })
     expect(styleSetterSpy).toHaveBeenCalledTimes(1)
   })
 })
@@ -814,8 +828,8 @@ describe('PetSprite status decoration (pet-center M5, #567)', () => {
     })
     let now = 0
     vi.spyOn(performance, 'now').mockImplementation(() => now)
-    // The ornament schedules by frame duration (setTimeout), the sprite
-    // still uses rAF; capture both so stepping advances both loops.
+    // The ornament and the sprite both schedule by frame duration
+    // (setTimeout), so one capture and one stepping helper drive both loops.
     const timers: { at: number; callback: () => void }[] = []
     let timerId = 0
     vi.spyOn(window, 'setTimeout').mockImplementation(((callback: () => void, delay = 0) => {
@@ -948,7 +962,12 @@ describe('PetSprite status decoration (pet-center M5, #567)', () => {
       return frames.length
     })
     vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
-    renderPet({ snapshot: { ...snapshot, bubble: '完成', phase: 'done', decoration: { ...decoration, loop: false } } })
+    // A custom visual keeps the sprite's own frame loop out of the timer
+    // capture, so a pending timer can only be the ornament's.
+    renderPet({
+      visual: <span data-testid="custom-visual" />,
+      snapshot: { ...snapshot, bubble: '完成', phase: 'done', decoration: { ...decoration, loop: false } },
+    })
     const el = ornament()!
     const step = (ms: number): void => {
       for (const callback of frames.splice(0)) callback(now)
@@ -967,7 +986,7 @@ describe('PetSprite status decoration (pet-center M5, #567)', () => {
     expect(el.style.backgroundPosition).toBe('-48px 0px')
     act(() => { step(161) })
     expect(el.style.backgroundPosition).toBe('-72px 0px')
-    // The ornament stopped scheduling timers (only the sprite rAF remains).
+    // The ornament stopped scheduling timers.
     expect(timers).toHaveLength(0)
     act(() => { step(161) })
     // The last frame holds.
@@ -1000,7 +1019,9 @@ describe('PetSprite status decoration (pet-center M5, #567)', () => {
     })
     vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
     // failed binds the single frame 3 of a 24px-wide frame; loop stays true.
+    // The custom visual keeps the sprite's own frame loop out of the capture.
     renderPet({
+      visual: <span data-testid="custom-visual" />,
       snapshot: {
         ...snapshot,
         bubble: '失败',
@@ -1010,7 +1031,7 @@ describe('PetSprite status decoration (pet-center M5, #567)', () => {
     })
     const el = ornament()!
     // The ornament settles on its only frame, exactly like the reduced-motion
-    // hold — no timer may start (only the sprite's idle rAF is pending).
+    // hold — no timer may start.
     expect(el.style.backgroundPosition).toBe('-72px 0px')
     expect(timers).toHaveLength(0)
     const step = (ts: number): void => { for (const callback of frames.splice(0)) callback(ts) }
@@ -1396,6 +1417,221 @@ describe('PetSprite announcement bubbles from several publishers (issue #1812)',
     expect(screen.queryByText('摸摸成功')).not.toBeNull()
     expect(screen.queryByText('今日 1.2M tokens')).toBeNull()
     expect(screen.queryByText('余额 ¥110.00')).toBeNull()
+  })
+})
+
+/**
+ * Capture every timer the pet schedules onto a virtual clock. The sprite frame
+ * loop sleeps until the next frame boundary (issue #17), so a test steps it by
+ * moving the clock and firing whatever became due.
+ */
+function captureTimers(clock: () => number): { at: number; callback: () => void }[] {
+  const timers: { at: number; callback: () => void }[] = []
+  let timerId = 0
+  vi.spyOn(window, 'setTimeout').mockImplementation(((callback: () => void, delay = 0) => {
+    timers.push({ at: clock() + delay, callback })
+    return ++timerId
+  }) as typeof window.setTimeout)
+  vi.spyOn(window, 'clearTimeout').mockImplementation(() => {})
+  return timers
+}
+
+/** Fire every captured timer once; each one may schedule the next wake. */
+function fireDue(timers: { at: number; callback: () => void }[]): void {
+  for (const timer of timers.splice(0)) timer.callback()
+}
+
+describe('PetSprite render cost (issue #17)', () => {
+  it('snaps the atlas grid and the sprite box to whole pixels', () => {
+    renderPet()
+    const sprite = screen.getByRole('button', { name: '鲸鱼娘' })
+    // 192x208 cells at display.size 160 are 147.69px and 160px unrounded. The
+    // box, the atlas grid and every frame offset share the whole-pixel cell,
+    // so a frame change is a whole-pixel translate of the scaled atlas instead
+    // of a fresh resample of the 1536x1872 source.
+    expect(sprite.style.width).toBe('148px')
+    expect(sprite.style.height).toBe('160px')
+    expect(sprite.style.backgroundSize).toBe('1184px 1440px')
+  })
+
+  it('advances frames on a duration timer instead of the screen refresh', () => {
+    vi.spyOn(window, 'matchMedia').mockReturnValue({
+      matches: false,
+      media: '(prefers-reduced-motion: reduce)',
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const timers = captureTimers(() => now)
+    const raf = vi.spyOn(window, 'requestAnimationFrame')
+    renderPet()
+    const sprite = screen.getByRole('button', { name: '鲸鱼娘' })
+    // Nothing drives the frame loop off the screen refresh any more.
+    expect(raf).not.toHaveBeenCalled()
+    // One pending wake: the loop's first tick, which then sleeps to the end of
+    // the frame in play instead of re-arming for the next screen refresh.
+    expect(timers).toHaveLength(1)
+    act(() => { fireDue(timers) })
+    expect(timers[0]?.at).toBe(400)
+    now = 410
+    act(() => { fireDue(timers) })
+    expect(sprite.style.backgroundPosition).toBe('-148px 0px')
+    // Idle frame 1 is already 10ms in, so the next wake is 390ms away.
+    expect(timers[0]?.at).toBe(800)
+  })
+
+  it('stops waking once a non-looping track holds its final frame', () => {
+    vi.spyOn(window, 'matchMedia').mockReturnValue({
+      matches: false,
+      media: '(prefers-reduced-motion: reduce)',
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const timers = captureTimers(() => now)
+    renderPet({ snapshot: { ...snapshot, animation: 'failed', phase: 'failed' } })
+    const sprite = screen.getByRole('button', { name: '鲸鱼娘' })
+    // 'failed' is a non-looping 8-frame track at 450ms per frame; the 8th frame
+    // holds once the host owns the switch to its fallback.
+    now = 8 * 450
+    act(() => { fireDue(timers) })
+    expect(sprite.style.backgroundPosition).toBe('-' + (7 * 148) + 'px -' + (rowOf('failed') * 160) + 'px')
+    // The track is settled: no timer is pending, so the pet stops waking the
+    // main thread for a frame that cannot change.
+    expect(timers).toHaveLength(0)
+    const styleSetterSpy = vi.spyOn(sprite.style, 'backgroundPosition', 'set')
+    now = 60_000
+    act(() => { fireDue(timers) })
+    expect(styleSetterSpy).not.toHaveBeenCalled()
+    expect(timers).toHaveLength(0)
+  })
+
+  it('repaints a settled frame when the sprite scale changes', () => {
+    vi.spyOn(window, 'matchMedia').mockReturnValue({
+      matches: false,
+      media: '(prefers-reduced-motion: reduce)',
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const timers = captureTimers(() => now)
+    const definition = petDefinition()
+    const display = snapshot.display
+    const failed = { ...snapshot, animation: 'failed' as const, phase: 'failed' as const }
+    const first = render(<PetSprite {...petProps({ definition, display, snapshot: failed })} />)
+    const sprite = screen.getByRole('button', { name: '鲸鱼娘' })
+    now = 8 * 450
+    act(() => { fireDue(timers) })
+    // A display.size change re-renders without restarting the track, and the
+    // settled loop is woken by nothing: the held frame must be repainted at the
+    // new scale or the box would show a neighbouring cell.
+    first.rerender(<PetSprite {...petProps({ definition, display: { ...display, size: 120 }, snapshot: failed })} />)
+    expect(sprite.style.width).toBe('111px')
+    expect(sprite.style.height).toBe('120px')
+    expect(sprite.style.backgroundPosition).toBe('-' + (7 * 111) + 'px -' + (rowOf('failed') * 120) + 'px')
+  })
+})
+
+describe('PetSprite roaming (issue #17)', () => {
+  /** Drive the walk loop with a captured requestAnimationFrame. */
+  function captureFrame(clock: () => number): { fire: () => void } {
+    let pending: FrameRequestCallback | undefined
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
+      pending = callback
+      return 1
+    })
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
+    return {
+      fire: () => {
+        const callback = pending
+        pending = undefined
+        callback?.(clock())
+      },
+    }
+  }
+
+  it('writes the walk position to the element and renders only on landing', () => {
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const frame = captureFrame(() => now)
+    const onDragEnd = vi.fn()
+    const tSpy = vi.fn(t)
+    const bus: GameplayBus = {}
+    renderPet({ onDragEnd, t: tSpy, bus })
+    const sprite = screen.getByRole('button', { name: '鲸鱼娘' })
+    const float = sprite.parentElement!.parentElement as HTMLDivElement
+    // Open the hover panel: every render then resolves panel copy through t, so
+    // the t call count is a render probe the walk must not disturb.
+    fireEvent.pointerOver(sprite)
+    const renders = tSpy.mock.calls.length
+    // 24 + 120 right, 60 px/s, so 2s of motion toward right = 144.
+    expect(bus.walk?.('left', 120, 60)).toBe(120)
+    now = 1_000
+    act(() => { frame.fire() })
+    expect(float.style.right).toBe('84px')
+    expect(float.style.bottom).toBe('20px')
+    // Mid-walk movement is a DOM write, not a React state update.
+    expect(tSpy.mock.calls.length).toBe(renders)
+    now = 2_000
+    act(() => { frame.fire() })
+    expect(float.style.right).toBe('144px')
+    expect(onDragEnd).toHaveBeenCalledTimes(1)
+    expect(onDragEnd).toHaveBeenCalledWith(144, 20)
+    // The landing frame hands the spot to React state, which keeps rendering it.
+    expect(tSpy.mock.calls.length).toBeGreaterThan(renders)
+    expect(float.style.right).toBe('144px')
+  })
+
+  it('keeps the walked position when a render lands mid-walk', () => {
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const frame = captureFrame(() => now)
+    const definition = petDefinition()
+    const display = snapshot.display
+    const bus: GameplayBus = {}
+    const first = render(<PetSprite {...petProps({ definition, display, bus })} />)
+    const sprite = screen.getByRole('button', { name: '鲸鱼娘' })
+    const float = sprite.parentElement!.parentElement as HTMLDivElement
+    bus.walk?.('left', 120, 60)
+    now = 1_000
+    act(() => { frame.fire() })
+    expect(float.style.right).toBe('84px')
+    // A host poll re-renders the sprite mid-walk; the walked spot rides a ref,
+    // so the sprite must not snap back to its saved position.
+    first.rerender(<PetSprite {...petProps({ definition, display, bus })} />)
+    expect(float.style.right).toBe('84px')
+  })
+
+  it('starts a drag from the position the pet reached mid-walk', () => {
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const frame = captureFrame(() => now)
+    const onDragEnd = vi.fn()
+    const bus: GameplayBus = {}
+    renderPet({ onDragEnd, bus })
+    const sprite = screen.getByRole('button', { name: '鲸鱼娘' })
+    bus.walk?.('left', 120, 60)
+    now = 1_000
+    act(() => { frame.fire() })
+    // Grab the pet where it actually is, not where the walk started.
+    fireEvent.pointerDown(sprite, { clientX: 100, clientY: 100 })
+    fireEvent.pointerUp(sprite)
+    expect(onDragEnd).toHaveBeenCalledWith(84, 20)
   })
 })
 

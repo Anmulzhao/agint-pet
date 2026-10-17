@@ -25,6 +25,18 @@ describe('pet bubble typography (#1549)', () => {
   })
 })
 
+describe('pet floating surfaces (issue #17)', () => {
+  it('keeps backdrop-filter off every surface that rides the sprite', () => {
+    // A blurred fixed layer makes the region behind it re-composite whenever
+    // the sprite animates or roams, and the blur runs on the CPU path under
+    // software compositing and power saving. Both the status bubble and the
+    // hover panel are 90%+ opaque, so the filter was invisible work. Comments
+    // are stripped first: the rules explain WHY the filter is gone.
+    const declared = css.replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(declared).not.toContain('backdrop-filter')
+  })
+})
+
 describe('pet hover panel css', () => {
   it('anchors the panel below the pet', () => {
     const panel = css.match(/\.panel\s*\{([^}]*)\}/)?.[1] ?? ''
