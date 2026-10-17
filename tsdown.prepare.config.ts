@@ -11,7 +11,6 @@ import { live2dVendorBundle } from './tsdown.live2d-vendor.ts'
  */
 export default clientBundle('@linxin666/dsh-pet', [
   'src/index.ts',
-  'src/invariant.ts',
 ], {
   libExternal: ['@deepseek-ai/dsh-settings'],
   companions: [live2dVendorBundle()],

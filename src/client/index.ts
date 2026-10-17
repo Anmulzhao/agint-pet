@@ -141,7 +141,7 @@ const BINDER_ATTEMPTS = 24
 
 /** The snapshot an unresolved (or resolvable-but-unbound) form publishes. */
 function pendingSnapshot<T>(status: 'loading' | 'unavailable'): ConfigFormSnapshot<T> {
-  return { status, value: undefined, base: undefined, user: undefined, revision: undefined, writable: false, mode: 'host' }
+  return { status, value: undefined, base: undefined, user: undefined, revision: undefined, writable: false }
 }
 
 /**

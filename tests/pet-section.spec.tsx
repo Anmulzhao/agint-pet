@@ -92,7 +92,6 @@ class FakeScope implements ConfigForm<PetSettings> {
       base: this.base,
       user: this.user,
       revision: 1,
-      mode: 'host',
     }
   }
   private reflect(): void {
