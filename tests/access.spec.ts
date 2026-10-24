@@ -53,4 +53,34 @@ describe('isPetAllowed', () => {
       cookie: 'dsh_pair=revoked',
     }))).toBe(false)
   })
+
+  it('refuses instead of throwing when the property lookup throws (un-injected cordis service)', () => {
+    // Given a real cordis context whose un-injected service throws on read
+    const ctx = Object.defineProperty({}, 'remoteWebUiPairing', {
+      get(): never {
+        throw new Error('cannot get property "remoteWebUiPairing" without inject')
+      },
+    })
+    // When a LAN request reaches the fence
+    // Then it answers "not paired" instead of leaking the error as an empty-body 400
+    expect(isPetAllowed(ctx as never, request({
+      remoteAddress: '192.168.1.20',
+      host: 'dsh.example:443',
+      cookie: 'dsh_pair=dev-1',
+    }))).toBe(false)
+  })
+
+  it('never reads the throwing property when ctx.get already answered', () => {
+    const get = vi.fn(() => undefined)
+    const ctx = Object.defineProperty({ get }, 'remoteWebUiPairing', {
+      get(): never {
+        throw new Error('cannot get property "remoteWebUiPairing" without inject')
+      },
+    })
+    expect(isPetAllowed(ctx as never, request({
+      remoteAddress: '192.168.1.20',
+      host: 'dsh.example:443',
+    }))).toBe(false)
+    expect(get).toHaveBeenCalledWith('remoteWebUiPairing', false)
+  })
 })
